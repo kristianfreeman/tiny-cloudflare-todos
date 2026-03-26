@@ -8,7 +8,7 @@ Deployed API: https://tiny-todo-api.signalnerve.workers.dev
 
 - Worker API with per-token auth backed by D1 (`users` + `api_tokens`).
 - Drizzle schema and D1 migration SQL for auth, lists/memberships RBAC, tasks, and recurrence rules.
-- Task endpoints: create, list, update, complete.
+- Task endpoints: create, list, update, complete (with lightweight `tags`).
 - List endpoints: create/list lists and owner-managed memberships.
 - Recurrence endpoints: create/list/update rules and materialization job endpoint.
 - Idempotent POST support for task creation and recurrence materialization retries.
@@ -58,8 +58,9 @@ Deployed API: https://tiny-todo-api.signalnerve.workers.dev
    export TODO_API_URL="http://127.0.0.1:8787"
    export TODO_API_TOKEN="change-me-for-local-dev"
 
-   npm run cli -- add "Write docs" --due 2026-03-26
-   npm run cli -- list --status open --sort due_date:asc
+   npm run cli -- add "Write docs" --due 2026-03-26 --tag owner:user,project:docs
+    npm run cli -- list --status open --sort due_date:asc
+    npm run cli -- list --status all --tag owner:agent
    npm run cli -- list --status all --search docs --due-before 2026-03-31 --json
    npm run cli -- recur "Daily standup note" --cadence daily --interval 1 --timezone America/New_York --skip 2026-03-27,2026-03-31
    npm run cli -- recur-list --sort next_run_date:asc --json
@@ -140,7 +141,7 @@ SHA-256 hashed and looked up in `api_tokens.token_hash`; requests run with that 
 
 - `GET /health`
 - `POST /tasks`
-- `GET /tasks?status=open|done|all&limit=100&offset=0&listId=<optional-list-id>&search=&due-before=&due-after=&sort=`
+- `GET /tasks?status=open|done|all&limit=100&offset=0&listId=<optional-list-id>&search=&due-before=&due-after=&sort=&tag=`
 - `PATCH /tasks/:taskId`
 - `POST /tasks/:taskId/complete`
 - `POST /lists`
@@ -171,6 +172,7 @@ SHA-256 hashed and looked up in `api_tokens.token_hash`; requests run with that 
 - `due-before` / `due-after` (optional): ISO date (`YYYY-MM-DD`) bounds against `dueDate`.
 - `listId` / `list_id` (optional): exact match by task `listId`.
 - `sort` (optional): `default`, `due_date_asc`, `due_date_desc`, `created_at_asc`, `created_at_desc`.
+- `tag` (optional): comma-delimited or repeated tag filter (for example `tag=owner:user` or `tag=owner:user,project:todos`).
 
 `default` sort preserves the original ordering semantics:
 
@@ -269,6 +271,7 @@ curl -sS -X POST "$TODO_API_URL/jobs/materialize-recurrence" \
 ### CLI list/filter options (Phase 2)
 
 - `--json` prints raw API JSON for `list` and `recur-list`.
+- `--tag owner:user,project:todos` tags a task on `add` and filters by tags on `list`.
 - `--list-id`, `--due-before`, `--due-after`, `--search`, and `--sort` are passed through to API query params.
 - `list` defaults to `--status open` and `limit=200`.
 

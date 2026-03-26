@@ -59,15 +59,15 @@ const queryAuditEvents = async (
 
 const createTask = async (
   context: WorkerTestContext,
-  payload: { title: string; note?: string; dueDate?: string; listId?: string }
-): Promise<{ id: string; title: string; note: string | null; dueDate: string | null; listId: string }> => {
+  payload: { title: string; note?: string; dueDate?: string; listId?: string; tags?: string[] }
+): Promise<{ id: string; title: string; note: string | null; dueDate: string | null; listId: string; tags: string[] }> => {
   const response = await apiRequest(context, "/tasks", {
     method: "POST",
     body: JSON.stringify(payload)
   });
   expect(response.status).toBe(201);
   const body = await readJson<{
-    task: { id: string; title: string; note: string | null; dueDate: string | null; listId: string };
+    task: { id: string; title: string; note: string | null; dueDate: string | null; listId: string; tags: string[] };
   }>(response);
   return body.task;
 };
@@ -393,6 +393,25 @@ describe("worker integration", () => {
     expect(response.status).toBe(200);
     const body = await readJson<{ tasks: Array<{ title: string }> }>(response);
     expect(body.tasks.map((task) => task.title)).toEqual(["Plan sprint"]);
+  });
+
+  it("supports lightweight tags for user and agent task views", async () => {
+    const context = await newContext();
+
+    const userTask = await createTask(context, { title: "Review roadmap", tags: ["owner:user", "project:todos"] });
+    await createTask(context, { title: "Sync snapshot", tags: ["owner:agent", "project:todos"] });
+
+    const userTagResponse = await apiRequest(context, "/tasks?status=all&tag=owner:user", { method: "GET" });
+    expect(userTagResponse.status).toBe(200);
+    const userTagBody = await readJson<{ tasks: Array<{ id: string; tags: string[] }> }>(userTagResponse);
+    expect(userTagBody.tasks).toHaveLength(1);
+    expect(userTagBody.tasks[0]?.id).toBe(userTask.id);
+    expect(userTagBody.tasks[0]?.tags).toEqual(["owner:user", "project:todos"]);
+
+    const projectTagResponse = await apiRequest(context, "/tasks?status=all&tag=project:todos", { method: "GET" });
+    expect(projectTagResponse.status).toBe(200);
+    const projectTagBody = await readJson<{ tasks: Array<{ id: string }> }>(projectTagResponse);
+    expect(projectTagBody.tasks).toHaveLength(2);
   });
 
   it("filters tasks by due-before and due-after", async () => {

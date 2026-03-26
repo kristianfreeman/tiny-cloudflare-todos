@@ -16,14 +16,15 @@ interface ListFilterOptions {
   dueAfter?: string;
   search?: string;
   sort?: string;
+  tag?: string;
 }
 
 const usage = `
 tiny-todo CLI
 
 Commands:
-  add <title> [--note <text>] [--due YYYY-MM-DD]
-  list [--status open|done|all] [--list-id <id>] [--due-before YYYY-MM-DD] [--due-after YYYY-MM-DD] [--search <text>] [--sort <field>] [--json]
+  add <title> [--note <text>] [--due YYYY-MM-DD] [--tag <tag[,tag...]>]
+  list [--status open|done|all] [--list-id <id>] [--due-before YYYY-MM-DD] [--due-after YYYY-MM-DD] [--search <text>] [--sort <field>] [--tag <tag[,tag...]>] [--json]
   done <task-id>
   recur <title-template> --cadence daily|weekly [--interval N] [--weekdays 1,3,5] [--note <text>] [--start YYYY-MM-DD] [--timezone Area/City] [--skip YYYY-MM-DD[,YYYY-MM-DD...]]
   recur-list [--list-id <id>] [--due-before YYYY-MM-DD] [--due-after YYYY-MM-DD] [--search <text>] [--sort <field>] [--json]
@@ -81,6 +82,7 @@ const optionListFilters = (options: ParsedArgs["options"]): ListFilterOptions =>
   const dueAfter = optionString(options, "due-after");
   const search = optionString(options, "search");
   const sort = optionString(options, "sort");
+  const tag = optionString(options, "tag");
 
   if (dueBefore && !isIsoDate(dueBefore)) {
     throw new Error("--due-before must be YYYY-MM-DD");
@@ -105,6 +107,9 @@ const optionListFilters = (options: ParsedArgs["options"]): ListFilterOptions =>
   if (sort) {
     filters.sort = sort;
   }
+  if (tag) {
+    filters.tag = tag;
+  }
   return filters;
 };
 
@@ -124,6 +129,22 @@ const appendListFilters = (params: URLSearchParams, filters: ListFilterOptions):
   if (filters.sort) {
     params.set("sort", filters.sort);
   }
+  if (filters.tag) {
+    params.set("tag", filters.tag);
+  }
+};
+
+const parseTagsOption = (rawValue: string | undefined): string[] | undefined => {
+  if (!rawValue) {
+    return undefined;
+  }
+
+  const tags = rawValue
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+
+  return tags.length > 0 ? tags : undefined;
 };
 
 const printJson = (value: unknown): void => {
@@ -205,9 +226,10 @@ const printTasks = (tasks: TaskDTO[]): void => {
     formatTaskStatus(task.status),
     task.dueDate ?? "-",
     task.title,
-    task.note ?? "-"
+    task.note ?? "-",
+    task.tags.join(",") || "-"
   ]);
-  process.stdout.write(`${formatTable(["ID", "STATUS", "DUE", "TITLE", "NOTE"], rows)}\n`);
+  process.stdout.write(`${formatTable(["ID", "STATUS", "DUE", "TITLE", "NOTE", "TAGS"], rows)}\n`);
 };
 
 const formatRule = (rule: RecurrenceRuleDTO): string => {
@@ -266,6 +288,7 @@ const syncAgentSnapshot = async (outPathArg: string | undefined): Promise<void> 
   } else {
     for (const task of openTasks) {
       lines.push(`- ${task.id} | ${task.title} | due:${task.dueDate ?? "none"} | note:${task.note ?? ""}`);
+      lines.push(`  tags:${task.tags.length > 0 ? task.tags.join(",") : "none"}`);
     }
   }
 
@@ -313,6 +336,7 @@ const main = async (): Promise<void> => {
 
     const note = typeof parsed.options.note === "string" ? parsed.options.note : undefined;
     const due = typeof parsed.options.due === "string" ? parsed.options.due : undefined;
+    const tags = parseTagsOption(optionString(parsed.options, "tag"));
     if (due && !isIsoDate(due)) {
       throw new Error("--due must be YYYY-MM-DD");
     }
@@ -323,6 +347,9 @@ const main = async (): Promise<void> => {
     }
     if (due) {
       payload.dueDate = due;
+    }
+    if (tags) {
+      payload.tags = tags;
     }
     const { task } = await request<{ task: TaskDTO }>("/tasks", {
       method: "POST",

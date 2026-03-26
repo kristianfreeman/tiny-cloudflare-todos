@@ -72,6 +72,7 @@ describe("sync-agent integration", () => {
                 id: "task-z",
                 title: "No due date",
                 note: "later",
+                tags: ["owner:agent"],
                 status: "open",
                 dueDate: null,
                 recurrenceRuleId: null,
@@ -83,6 +84,7 @@ describe("sync-agent integration", () => {
                 id: "task-a",
                 title: "Due first",
                 note: null,
+                tags: ["owner:user", "project:home"],
                 status: "open",
                 dueDate: "2026-03-01",
                 recurrenceRuleId: null,
@@ -94,6 +96,7 @@ describe("sync-agent integration", () => {
                 id: "task-done",
                 title: "Finished",
                 note: null,
+                tags: ["owner:user"],
                 status: "done",
                 dueDate: "2026-02-20",
                 recurrenceRuleId: null,
@@ -105,6 +108,7 @@ describe("sync-agent integration", () => {
                 id: "task-b",
                 title: "Due second",
                 note: "alpha",
+                tags: [],
                 status: "open",
                 dueDate: "2026-03-01",
                 recurrenceRuleId: null,
@@ -196,8 +200,11 @@ describe("sync-agent integration", () => {
 
 ## Open Tasks
 - task-a | Due first | due:2026-03-01 | note:
+  tags:owner:user,project:home
 - task-b | Due second | due:2026-03-01 | note:alpha
+  tags:none
 - task-z | No due date | due:none | note:later
+  tags:owner:agent
 
 ## Done Tasks
 - task-done | Finished | done:2026-02-20T09:10:11.000Z

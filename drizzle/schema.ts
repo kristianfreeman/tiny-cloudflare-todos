@@ -87,6 +87,21 @@ export const tasks = sqliteTable("tasks", {
   completedAt: text("completed_at")
 });
 
+export const taskTags = sqliteTable(
+  "task_tags",
+  {
+    taskId: text("task_id")
+      .notNull()
+      .references(() => tasks.id),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id),
+    tag: text("tag").notNull(),
+    createdAt: text("created_at").notNull()
+  },
+  (table) => [primaryKey({ columns: [table.taskId, table.tag] })]
+);
+
 export const idempotencyRecords = sqliteTable(
   "idempotency_records",
   {
@@ -126,3 +141,4 @@ export type UserRow = typeof users.$inferSelect;
 export type ApiTokenRow = typeof apiTokens.$inferSelect;
 export type ListRow = typeof lists.$inferSelect;
 export type ListMembershipRow = typeof listMemberships.$inferSelect;
+export type TaskTagRow = typeof taskTags.$inferSelect;

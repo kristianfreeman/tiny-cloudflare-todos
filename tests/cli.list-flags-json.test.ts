@@ -95,6 +95,7 @@ describe("cli list json and filter flags", () => {
                 id: "task-1",
                 title: "Pay rent",
                 note: "bank transfer",
+                tags: ["owner:user", "project:finance"],
                 status: "open",
                 dueDate: "2026-03-28",
                 recurrenceRuleId: null,
@@ -144,6 +145,8 @@ describe("cli list json and filter flags", () => {
         "rent",
         "--sort",
         "due_date:asc",
+        "--tag",
+        "owner:user",
         "--json"
       ],
       `http://127.0.0.1:${String(address.port)}`,
@@ -162,6 +165,7 @@ describe("cli list json and filter flags", () => {
     expect(requestUrl.searchParams.get("due_after")).toBe("2026-03-01");
     expect(requestUrl.searchParams.get("search")).toBe("rent");
     expect(requestUrl.searchParams.get("sort")).toBe("due_date:asc");
+    expect(requestUrl.searchParams.get("tag")).toBe("owner:user");
 
     const output = JSON.parse(result.stdout) as {
       tasks: Array<{ id: string; title: string; dueDate: string | null; status: string }>;

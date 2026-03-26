@@ -7,6 +7,7 @@ import {
   listMemberships,
   lists,
   recurrenceRules,
+  taskTags,
   tasks,
   users
 } from "../../drizzle/schema";
@@ -160,6 +161,18 @@ const normalizeExceptionDates = (exceptionDates: string[] | null | undefined): s
   return deduped.length > 0 ? deduped : null;
 };
 
+const normalizeTaskTags = (tags: string[] | null | undefined): string[] | null => {
+  if (!tags || tags.length === 0) {
+    return null;
+  }
+
+  const normalized = [...new Set(tags.map((value) => value.trim().toLowerCase()))]
+    .filter((value) => value.length > 0)
+    .sort((left, right) => left.localeCompare(right));
+
+  return normalized.length > 0 ? normalized : null;
+};
+
 const computeNextRunDate = (rule: typeof recurrenceRules.$inferSelect, fromDate: string): string => {
   if (rule.cadence === "daily") {
     return addDays(fromDate, rule.interval);
@@ -187,11 +200,12 @@ const computeNextRunDate = (rule: typeof recurrenceRules.$inferSelect, fromDate:
   return addDays(fromDate, 7 * rule.interval);
 };
 
-const mapTask = (row: typeof tasks.$inferSelect): TaskDTO => ({
+const mapTask = (row: typeof tasks.$inferSelect, tags: string[] = []): TaskDTO => ({
   id: row.id,
   listId: row.listId,
   title: row.title,
   note: row.note,
+  tags,
   status: row.status as TaskStatus,
   dueDate: row.dueDate,
   recurrenceRuleId: row.recurrenceRuleId,
@@ -239,7 +253,7 @@ const mapMembership = (row: typeof listMemberships.$inferSelect): ListMembership
 
 const dbForEnv = (env: Env) =>
   drizzle(env.DB, {
-    schema: { users, apiTokens, lists, listMemberships, tasks, recurrenceRules, idempotencyRecords, auditEvents }
+    schema: { users, apiTokens, lists, listMemberships, tasks, taskTags, recurrenceRules, idempotencyRecords, auditEvents }
   });
 
 const isSafeRequestId = (value: string): boolean => /^[a-zA-Z0-9._:-]{8,128}$/.test(value);
@@ -407,6 +421,53 @@ const listIdsForMember = async (env: Env, userId: string, minimumRole: ListRole)
     .from(listMemberships)
     .where(eq(listMemberships.userId, userId));
   return rows.filter((row) => hasMinimumRole(row.role, minimumRole)).map((row) => row.listId);
+};
+
+const loadTaskTagsByTaskId = async (
+  env: Env,
+  taskIds: string[]
+): Promise<Map<string, string[]>> => {
+  const tagsByTaskId = new Map<string, string[]>();
+  if (taskIds.length === 0) {
+    return tagsByTaskId;
+  }
+
+  const db = dbForEnv(env);
+  const rows = await db
+    .select({ taskId: taskTags.taskId, tag: taskTags.tag })
+    .from(taskTags)
+    .where(inArray(taskTags.taskId, taskIds))
+    .orderBy(asc(taskTags.taskId), asc(taskTags.tag));
+
+  for (const row of rows) {
+    const existing = tagsByTaskId.get(row.taskId);
+    if (existing) {
+      existing.push(row.tag);
+      continue;
+    }
+    tagsByTaskId.set(row.taskId, [row.tag]);
+  }
+
+  return tagsByTaskId;
+};
+
+const syncTaskTags = async (env: Env, taskId: string, userId: string, tags: string[] | null): Promise<void> => {
+  const db = dbForEnv(env);
+  await db.delete(taskTags).where(eq(taskTags.taskId, taskId));
+
+  if (!tags || tags.length === 0) {
+    return;
+  }
+
+  const now = new Date().toISOString();
+  await db.insert(taskTags).values(
+    tags.map((tag) => ({
+      taskId,
+      userId,
+      tag,
+      createdAt: now
+    }))
+  );
 };
 
 const isUniqueConstraintError = (value: unknown): boolean => {
@@ -600,6 +661,11 @@ const createTask = async (
     return error("listId cannot be empty", 422);
   }
 
+  const normalizedTags = normalizeTaskTags(payload.tags);
+  if (payload.tags !== undefined && payload.tags.length > 0 && !normalizedTags) {
+    return error("tags must contain at least one non-empty value", 422);
+  }
+
   const db = dbForEnv(env);
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
@@ -622,6 +688,8 @@ const createTask = async (
     completedAt: null
   });
 
+  await syncTaskTags(env, id, auth.userId, normalizedTags);
+
   const created = await db.select().from(tasks).where(eq(tasks.id, id));
   if (!created[0]) {
     return error("failed to create task", 500);
@@ -643,7 +711,7 @@ const createTask = async (
     status: 201,
     details: { action: "create" }
   });
-  return json({ task: mapTask(created[0]) }, 201);
+  return json({ task: mapTask(created[0], normalizedTags ?? []) }, 201);
 };
 
 const listTasks = async (request: Request, env: Env, auth: AuthContext): Promise<Response> => {
@@ -659,6 +727,11 @@ const listTasks = async (request: Request, env: Env, auth: AuthContext): Promise
   const dueAfter = url.searchParams.get("due-after")?.trim() ?? null;
   const listId = listIdParam?.trim() ?? null;
   const sortQuery = (url.searchParams.get("sort") ?? "default").trim().toLowerCase();
+  const tagFilter = url.searchParams
+    .getAll("tag")
+    .flatMap((value) => value.split(","))
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value.length > 0);
 
   if (dueBefore && !isValidIsoDate(dueBefore)) {
     return error("due-before must be YYYY-MM-DD", 422);
@@ -711,6 +784,20 @@ const listTasks = async (request: Request, env: Env, auth: AuthContext): Promise
       sql`(lower(${tasks.title}) LIKE ${pattern} ESCAPE '\\' OR lower(coalesce(${tasks.note}, '')) LIKE ${pattern} ESCAPE '\\')`
     );
   }
+  if (tagFilter.length > 0) {
+    filters.push(
+      sql`EXISTS (
+        SELECT 1
+        FROM ${taskTags}
+        WHERE ${taskTags.taskId} = ${tasks.id}
+          AND ${taskTags.userId} = ${auth.userId}
+          AND lower(${taskTags.tag}) IN (${sql.join(
+          tagFilter.map((tag) => sql`${tag}`),
+          sql`, `
+        )})
+      )`
+    );
+  }
 
   const orderBy =
     sort === "default"
@@ -733,7 +820,12 @@ const listTasks = async (request: Request, env: Env, auth: AuthContext): Promise
     .limit(safeLimit)
     .offset(safeOffset);
 
-  return json({ tasks: rows.map(mapTask) } satisfies ListTasksResponse);
+  const tagsByTaskId = await loadTaskTagsByTaskId(
+    env,
+    rows.map((row) => row.id)
+  );
+
+  return json({ tasks: rows.map((row) => mapTask(row, tagsByTaskId.get(row.id) ?? [])) } satisfies ListTasksResponse);
 };
 
 const updateTask = async (
@@ -774,6 +866,12 @@ const updateTask = async (
     }
     updates.listId = listId;
   }
+  if (payload.tags !== undefined) {
+    const normalizedTags = normalizeTaskTags(payload.tags);
+    if (payload.tags.length > 0 && !normalizedTags) {
+      return error("tags must contain at least one non-empty value", 422);
+    }
+  }
   if (Object.keys(updates).length === 1) {
     return error("no updates provided", 422);
   }
@@ -789,10 +887,14 @@ const updateTask = async (
     return roleResult;
   }
   await db.update(tasks).set(updates).where(eq(tasks.id, taskId));
+  if (payload.tags !== undefined) {
+    await syncTaskTags(env, taskId, existing.userId, normalizeTaskTags(payload.tags));
+  }
   const updated = await db.select().from(tasks).where(eq(tasks.id, taskId));
   if (!updated[0]) {
     return error("task not found", 404);
   }
+  const tagsByTaskId = await loadTaskTagsByTaskId(env, [taskId]);
 
   await writeAuditEvent(env, requestContext, "task.updated", auth.userId, "task", taskId, {
     fields: Object.keys(payload)
@@ -808,7 +910,7 @@ const updateTask = async (
     status: 200,
     details: { action: "update", fields: Object.keys(payload) }
   });
-  return json({ task: mapTask(updated[0]) });
+  return json({ task: mapTask(updated[0], tagsByTaskId.get(taskId) ?? []) });
 };
 
 const completeTask = async (
@@ -839,6 +941,7 @@ const completeTask = async (
   if (!updated[0]) {
     return error("task not found", 404);
   }
+  const tagsByTaskId = await loadTaskTagsByTaskId(env, [taskId]);
 
   await writeAuditEvent(env, requestContext, "task.completed", auth.userId, "task", taskId, {
     status: "done"
@@ -854,7 +957,7 @@ const completeTask = async (
     status: 200,
     details: { action: "complete" }
   });
-  return json({ task: mapTask(updated[0]) });
+  return json({ task: mapTask(updated[0], tagsByTaskId.get(taskId) ?? []) });
 };
 
 const createRecurrenceRule = async (

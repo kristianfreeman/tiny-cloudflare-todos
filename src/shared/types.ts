@@ -34,6 +34,7 @@ export interface CreateTaskInput {
   note?: string;
   dueDate?: string;
   listId?: string;
+  tags?: string[];
 }
 
 export interface UpdateTaskInput {
@@ -41,6 +42,7 @@ export interface UpdateTaskInput {
   note?: string;
   dueDate?: string | null;
   listId?: string;
+  tags?: string[];
 }
 
 export type TaskSort = "default" | "due_date_asc" | "due_date_desc" | "created_at_asc" | "created_at_desc";
@@ -54,6 +56,7 @@ export interface ListTasksQuery {
   dueAfter?: string;
   listId?: string;
   sort?: TaskSort;
+  tag?: string;
 }
 
 export interface CreateRecurrenceRuleInput {
@@ -80,6 +83,7 @@ export interface TaskDTO {
   listId: string;
   title: string;
   note: string | null;
+  tags: string[];
   status: TaskStatus;
   dueDate: string | null;
   recurrenceRuleId: string | null;
