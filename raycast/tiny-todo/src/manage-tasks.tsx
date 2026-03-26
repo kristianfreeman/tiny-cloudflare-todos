@@ -1,9 +1,18 @@
 import { Action, ActionPanel, Icon, List, showToast, Toast, useNavigation } from "@raycast/api";
 import { useEffect, useMemo, useState } from "react";
 import AddTaskCommand from "./add-task";
-import { completeTask, getDefaultStatusFilter, listTasks, type TaskStatus, type TodoTask } from "./api";
+import {
+  completeTask,
+  getDefaultOwnerScope,
+  getDefaultStatusFilter,
+  listTasks,
+  type OwnerScope,
+  type TaskStatus,
+  type TodoTask
+} from "./api";
 
 type ViewFilter = "open" | "done" | "all";
+type TagFilter = "__all__" | string;
 
 const toViewFilter = (status: TaskStatus): ViewFilter => {
   if (status === "all" || status === "done") {
@@ -26,6 +35,10 @@ const subtitle = (task: TodoTask): string => {
     return task.note;
   }
 
+  if (task.tags.length > 0) {
+    return task.tags.join(", ");
+  }
+
   return dueLabel(task);
 };
 
@@ -34,7 +47,7 @@ const matchesSearch = (task: TodoTask, query: string): boolean => {
     return true;
   }
 
-  const text = `${task.title}\n${task.note ?? ""}`.toLowerCase();
+  const text = `${task.title}\n${task.note ?? ""}\n${task.tags.join(" ")}`.toLowerCase();
   return text.includes(query.toLowerCase());
 };
 
@@ -49,9 +62,31 @@ const compareTasks = (left: TodoTask, right: TodoTask): number => {
   return left.title.localeCompare(right.title);
 };
 
+const ownerScopeToTags = (scope: OwnerScope): string[] | undefined => {
+  if (scope === "user") {
+    return ["owner:user"];
+  }
+  if (scope === "agent") {
+    return ["owner:agent"];
+  }
+  return undefined;
+};
+
+const ownerScopeTitle = (scope: OwnerScope): string => {
+  if (scope === "user") {
+    return "My Tasks";
+  }
+  if (scope === "agent") {
+    return "Agent Tasks";
+  }
+  return "All Tasks";
+};
+
 export default function ManageTasksCommand() {
   const { push } = useNavigation();
   const [viewFilter, setViewFilter] = useState<ViewFilter>(() => toViewFilter(getDefaultStatusFilter()));
+  const [ownerScope, setOwnerScope] = useState<OwnerScope>(() => getDefaultOwnerScope());
+  const [tagFilter, setTagFilter] = useState<TagFilter>("__all__");
   const [tasks, setTasks] = useState<TodoTask[]>([]);
   const [searchText, setSearchText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -60,7 +95,7 @@ export default function ManageTasksCommand() {
     setIsLoading(true);
     try {
       const status: TaskStatus = viewFilter;
-      const nextTasks = await listTasks(status);
+      const nextTasks = await listTasks(status, ownerScopeToTags(ownerScope));
       setTasks(nextTasks);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -76,11 +111,29 @@ export default function ManageTasksCommand() {
 
   useEffect(() => {
     void loadTasks();
-  }, [viewFilter]);
+  }, [viewFilter, ownerScope]);
+
+  const availableTags = useMemo(
+    () =>
+      [...new Set(tasks.flatMap((task) => task.tags))]
+        .filter((tag) => !tag.startsWith("owner:"))
+        .sort((left, right) => left.localeCompare(right)),
+    [tasks]
+  );
+
+  useEffect(() => {
+    if (tagFilter !== "__all__" && !availableTags.includes(tagFilter)) {
+      setTagFilter("__all__");
+    }
+  }, [availableTags, tagFilter]);
 
   const filtered = useMemo(
-    () => tasks.filter((task) => matchesSearch(task, searchText)).sort(compareTasks),
-    [tasks, searchText]
+    () =>
+      tasks
+        .filter((task) => (tagFilter === "__all__" ? true : task.tags.includes(tagFilter)))
+        .filter((task) => matchesSearch(task, searchText))
+        .sort(compareTasks),
+    [tasks, tagFilter, searchText]
   );
 
   const openTasks = filtered.filter((task) => task.status === "open");
@@ -105,14 +158,23 @@ export default function ManageTasksCommand() {
   const commonActions = (
     <>
       <Action title="Refresh" icon={Icon.ArrowClockwise} onAction={() => void loadTasks()} shortcut={{ modifiers: ["cmd"], key: "r" }} />
-      <Action title="Add Task" icon={Icon.Plus} onAction={() => push(<AddTaskCommand />)} shortcut={{ modifiers: ["cmd"], key: "n" }} />
+      <Action title="Quick Add Task" icon={Icon.Plus} onAction={() => push(<AddTaskCommand />)} shortcut={{ modifiers: ["cmd"], key: "n" }} />
     </>
   );
+
+  const accessoryForTask = (task: TodoTask): List.Item.Accessory[] => {
+    const accessories: List.Item.Accessory[] = [{ text: dueLabel(task) }];
+    if (task.tags.length > 0) {
+      accessories.unshift({ tag: task.tags.join(" · ") });
+    }
+    return accessories;
+  };
 
   return (
     <List
       isLoading={isLoading}
-      searchBarPlaceholder="Search tasks by title or note"
+      navigationTitle={ownerScopeTitle(ownerScope)}
+      searchBarPlaceholder="Search tasks, notes, and tags"
       searchText={searchText}
       onSearchTextChange={setSearchText}
       searchBarAccessory={
@@ -123,13 +185,43 @@ export default function ManageTasksCommand() {
         </List.Dropdown>
       }
     >
+      <List.Section title="Filters">
+        <List.Item
+          title="Owner Scope"
+          subtitle={ownerScopeTitle(ownerScope)}
+          icon={Icon.Person}
+          actions={
+            <ActionPanel>
+              <Action title="Show All Tasks" onAction={() => setOwnerScope("all")} />
+              <Action title="Show My Tasks" onAction={() => setOwnerScope("user")} />
+              <Action title="Show Agent Tasks" onAction={() => setOwnerScope("agent")} />
+              {commonActions}
+            </ActionPanel>
+          }
+        />
+        <List.Item
+          title="Tag Filter"
+          subtitle={tagFilter === "__all__" ? "Any tag" : tagFilter}
+          icon={Icon.Tag}
+          actions={
+            <ActionPanel>
+              <Action title="Use Any Tag" onAction={() => setTagFilter("__all__")} />
+              {availableTags.map((tag) => (
+                <Action key={tag} title={`Filter by ${tag}`} onAction={() => setTagFilter(tag)} />
+              ))}
+              {commonActions}
+            </ActionPanel>
+          }
+        />
+      </List.Section>
+
       <List.Section title="Open" subtitle={String(openTasks.length)}>
         {openTasks.map((task) => (
           <List.Item
             key={task.id}
             title={task.title}
             subtitle={subtitle(task)}
-            accessories={[{ text: dueLabel(task) }]}
+            accessories={accessoryForTask(task)}
             actions={
               <ActionPanel>
                 <Action title="Complete Task" icon={Icon.Checkmark} onAction={() => void onCompleteTask(task)} />

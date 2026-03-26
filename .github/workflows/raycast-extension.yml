@@ -31,15 +31,18 @@ jobs:
         working-directory: raycast/tiny-todo
 
       - name: Build extension
-        run: npm run build
+        run: npx ray build -e dist --output .ray-build
         working-directory: raycast/tiny-todo
 
       - name: Create installable extension archive
         if: github.event_name == 'push'
         run: |
-          cd raycast
-          zip -r "../tiny-todo-raycast-extension-${GITHUB_SHA}.zip" tiny-todo \
-            -x "tiny-todo/node_modules/*" "tiny-todo/dist/*"
+          mkdir -p release/tiny-todo
+          cp -R raycast/tiny-todo/.ray-build/. release/tiny-todo/
+          cp raycast/tiny-todo/icon.png release/tiny-todo/icon.png
+          cp raycast/tiny-todo/README.md release/tiny-todo/README.md
+          cd release
+          zip -r "../tiny-todo-raycast-extension-${GITHUB_SHA}.zip" tiny-todo
 
       - name: Upload installable extension archive
         if: github.event_name == 'push'

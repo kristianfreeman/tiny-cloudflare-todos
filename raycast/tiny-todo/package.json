@@ -17,15 +17,29 @@
   "commands": [
     {
       "name": "manage-tasks",
-      "title": "Manage Tasks",
-      "description": "Browse open and done tasks and mark tasks complete",
+      "title": "Task Inbox",
+      "description": "Review open and done tasks with owner and tag filters",
       "mode": "view"
     },
     {
       "name": "add-task",
-      "title": "Add Task",
+      "title": "Quick Add Task",
       "description": "Create a task in Tiny Todo",
       "mode": "view"
+    },
+    {
+      "name": "tasks-by-tag",
+      "title": "Tasks by Tag",
+      "description": "Lookup tasks using a specific tag",
+      "mode": "view",
+      "arguments": [
+        {
+          "name": "tag",
+          "type": "text",
+          "placeholder": "owner:agent",
+          "required": true
+        }
+      ]
     }
   ],
   "preferences": [
@@ -48,8 +62,8 @@
       "name": "defaultStatus",
       "type": "dropdown",
       "required": false,
-      "title": "Default Status Filter",
-      "description": "Initial status filter when opening Manage Tasks",
+      "title": "Default Inbox Status",
+      "description": "Initial status filter when opening Task Inbox",
       "default": "open",
       "data": [
         {
@@ -63,6 +77,28 @@
         {
           "title": "All",
           "value": "all"
+        }
+      ]
+    },
+    {
+      "name": "defaultOwnerScope",
+      "type": "dropdown",
+      "required": false,
+      "title": "Default Owner Scope",
+      "description": "Choose whether Task Inbox starts with all, human, or agent tasks",
+      "default": "all",
+      "data": [
+        {
+          "title": "All Tasks",
+          "value": "all"
+        },
+        {
+          "title": "My Tasks (owner:user)",
+          "value": "user"
+        },
+        {
+          "title": "Agent Tasks (owner:agent)",
+          "value": "agent"
         }
       ]
     }

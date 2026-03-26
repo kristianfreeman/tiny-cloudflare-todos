@@ -4,6 +4,7 @@ export interface TodoTask {
   id: string;
   title: string;
   note: string | null;
+  tags: string[];
   status: "open" | "done";
   dueDate: string | null;
   completedAt: string | null;
@@ -19,6 +20,7 @@ interface CreateTaskInput {
   title: string;
   note?: string;
   dueDate?: string;
+  tags?: string[];
 }
 
 export type TaskStatus = "open" | "done" | "all";
@@ -27,7 +29,10 @@ interface Preferences {
   apiBaseUrl: string;
   apiToken: string;
   defaultStatus?: TaskStatus;
+  defaultOwnerScope?: OwnerScope;
 }
+
+export type OwnerScope = "all" | "user" | "agent";
 
 interface ErrorResponse {
   error?: string;
@@ -85,8 +90,20 @@ export const getDefaultStatusFilter = (): TaskStatus => {
   return "open";
 };
 
-export const listTasks = async (status: TaskStatus): Promise<TodoTask[]> => {
+export const getDefaultOwnerScope = (): OwnerScope => {
+  const preferences = getPreferenceValues<Preferences>();
+  if (preferences.defaultOwnerScope === "user" || preferences.defaultOwnerScope === "agent") {
+    return preferences.defaultOwnerScope;
+  }
+
+  return "all";
+};
+
+export const listTasks = async (status: TaskStatus, tags?: string[]): Promise<TodoTask[]> => {
   const query = new URLSearchParams({ status, limit: "200" });
+  if (tags && tags.length > 0) {
+    query.set("tag", tags.join(","));
+  }
   const response = await request<TaskListResponse>(`/tasks?${query.toString()}`);
   return response.tasks;
 };

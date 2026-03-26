@@ -12,8 +12,9 @@ The extension uses required preferences, so Raycast prompts for these values bef
 
 ## Commands
 
-- **Manage Tasks**: View open/done tasks, filter by status, search, and complete tasks.
-- **Add Task**: Create a task with optional note and due date.
+- **Task Inbox**: Review open/done tasks with owner-scope and tag filters, search, and complete tasks.
+- **Quick Add Task**: Create a task with optional note, due date, and tags.
+- **Tasks by Tag**: Open a focused list for a specific tag like `owner:agent` or `project:docs`.
 
 ## CI Build + Publish
 
@@ -28,6 +29,8 @@ This repository includes a GitHub Actions workflow at `.github/workflows/raycast
 1. Open the latest workflow run for `Raycast Extension` in GitHub Actions.
 2. Download artifact `tiny-todo-raycast-extension-<sha>`.
 3. Unzip it and use Raycast's **Import Extension** command to import the extracted `tiny-todo` folder.
+
+The artifact contains prebuilt command JS files (`add-task.js` and `manage-tasks.js`) so you do not need a local rebuild before import.
 
 ### Required CI Secret
 

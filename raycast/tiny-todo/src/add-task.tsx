@@ -5,6 +5,7 @@ interface AddTaskFormValues {
   title: string;
   note?: string;
   dueDate?: Date;
+  tags?: string;
 }
 
 const formatDateForApi = (date: Date): string => {
@@ -16,6 +17,23 @@ const formatDateForApi = (date: Date): string => {
 
 export default function AddTaskCommand() {
   const { pop } = useNavigation();
+
+  const parseTags = (value: string | undefined): string[] | undefined => {
+    if (!value) {
+      return undefined;
+    }
+
+    const tags = value
+      .split(",")
+      .map((tag) => tag.trim().toLowerCase())
+      .filter((tag) => tag.length > 0);
+
+    if (tags.length === 0) {
+      return undefined;
+    }
+
+    return [...new Set(tags)];
+  };
 
   const onSubmit = async (values: AddTaskFormValues): Promise<void> => {
     if (!values.title?.trim()) {
@@ -29,7 +47,8 @@ export default function AddTaskCommand() {
       await createTask({
         title: values.title.trim(),
         note: values.note?.trim() || undefined,
-        dueDate: values.dueDate ? formatDateForApi(values.dueDate) : undefined
+        dueDate: values.dueDate ? formatDateForApi(values.dueDate) : undefined,
+        tags: parseTags(values.tags)
       });
       toast.style = Toast.Style.Success;
       toast.title = "Task created";
@@ -53,6 +72,7 @@ export default function AddTaskCommand() {
       <Form.TextField id="title" title="Title" placeholder="Write docs" />
       <Form.TextArea id="note" title="Note" placeholder="Optional task details" />
       <Form.DatePicker id="dueDate" title="Due Date" type={Form.DatePicker.Type.Date} />
+      <Form.TextField id="tags" title="Tags" placeholder="owner:user,project:todos" />
     </Form>
   );
 }
