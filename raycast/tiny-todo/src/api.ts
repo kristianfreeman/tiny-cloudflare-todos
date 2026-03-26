@@ -51,16 +51,17 @@ const normalizeTaskTags = (value: unknown): string[] => {
 
 const normalizeTask = (task: TodoTask): TodoTask => ({
   ...task,
-  tags: normalizeTaskTags(task.tags)
+  tags: normalizeTaskTags(task.tags),
 });
 
-const normalizeApiBaseUrl = (value: string): string => value.replace(/\/+$/, "");
+const normalizeApiBaseUrl = (value: string): string =>
+  value.replace(/\/+$/, "");
 
 const getApiConfig = (): { apiBaseUrl: string; apiToken: string } => {
   const preferences = getPreferenceValues<Preferences>();
   return {
     apiBaseUrl: normalizeApiBaseUrl(preferences.apiBaseUrl),
-    apiToken: preferences.apiToken
+    apiToken: preferences.apiToken,
   };
 };
 
@@ -86,8 +87,8 @@ const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
     headers: {
       Authorization: `Bearer ${apiToken}`,
       "Content-Type": "application/json",
-      ...init?.headers
-    }
+      ...init?.headers,
+    },
   });
 
   if (!response.ok) {
@@ -99,7 +100,10 @@ const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
 
 export const getDefaultStatusFilter = (): TaskStatus => {
   const preferences = getPreferenceValues<Preferences>();
-  if (preferences.defaultStatus === "done" || preferences.defaultStatus === "all") {
+  if (
+    preferences.defaultStatus === "done" ||
+    preferences.defaultStatus === "all"
+  ) {
     return preferences.defaultStatus;
   }
 
@@ -108,34 +112,45 @@ export const getDefaultStatusFilter = (): TaskStatus => {
 
 export const getDefaultOwnerScope = (): OwnerScope => {
   const preferences = getPreferenceValues<Preferences>();
-  if (preferences.defaultOwnerScope === "user" || preferences.defaultOwnerScope === "agent") {
+  if (
+    preferences.defaultOwnerScope === "user" ||
+    preferences.defaultOwnerScope === "agent"
+  ) {
     return preferences.defaultOwnerScope;
   }
 
   return "all";
 };
 
-export const listTasks = async (status: TaskStatus, tags?: string[]): Promise<TodoTask[]> => {
+export const listTasks = async (
+  status: TaskStatus,
+  tags?: string[],
+): Promise<TodoTask[]> => {
   const query = new URLSearchParams({ status, limit: "200" });
   if (tags && tags.length > 0) {
     query.set("tag", tags.join(","));
   }
-  const response = await request<TaskListResponse>(`/tasks?${query.toString()}`);
+  const response = await request<TaskListResponse>(
+    `/tasks?${query.toString()}`,
+  );
   return response.tasks.map(normalizeTask);
 };
 
 export const createTask = async (input: CreateTaskInput): Promise<TodoTask> => {
   const response = await request<{ task: TodoTask }>("/tasks", {
     method: "POST",
-    body: JSON.stringify(input)
+    body: JSON.stringify(input),
   });
   return normalizeTask(response.task);
 };
 
 export const completeTask = async (taskId: string): Promise<TodoTask> => {
   const encodedId = encodeURIComponent(taskId);
-  const response = await request<{ task: TodoTask }>(`/tasks/${encodedId}/complete`, {
-    method: "POST"
-  });
+  const response = await request<{ task: TodoTask }>(
+    `/tasks/${encodedId}/complete`,
+    {
+      method: "POST",
+    },
+  );
   return normalizeTask(response.task);
 };

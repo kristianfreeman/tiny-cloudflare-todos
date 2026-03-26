@@ -1,4 +1,12 @@
-import { Action, ActionPanel, Icon, List, showToast, Toast, useNavigation } from "@raycast/api";
+import {
+  Action,
+  ActionPanel,
+  Icon,
+  List,
+  showToast,
+  Toast,
+  useNavigation,
+} from "@raycast/api";
 import { useEffect, useMemo, useState } from "react";
 import AddTaskCommand from "./add-task";
 import {
@@ -8,7 +16,7 @@ import {
   listTasks,
   type OwnerScope,
   type TaskStatus,
-  type TodoTask
+  type TodoTask,
 } from "./api";
 
 type ViewFilter = "open" | "done" | "all";
@@ -49,7 +57,8 @@ const matchesSearch = (task: TodoTask, query: string): boolean => {
   }
 
   const tags = Array.isArray(task.tags) ? task.tags : [];
-  const text = `${task.title}\n${task.note ?? ""}\n${tags.join(" ")}`.toLowerCase();
+  const text =
+    `${task.title}\n${task.note ?? ""}\n${tags.join(" ")}`.toLowerCase();
   return text.includes(query.toLowerCase());
 };
 
@@ -86,8 +95,12 @@ const ownerScopeTitle = (scope: OwnerScope): string => {
 
 export default function ManageTasksCommand() {
   const { push } = useNavigation();
-  const [viewFilter, setViewFilter] = useState<ViewFilter>(() => toViewFilter(getDefaultStatusFilter()));
-  const [ownerScope, setOwnerScope] = useState<OwnerScope>(() => getDefaultOwnerScope());
+  const [viewFilter, setViewFilter] = useState<ViewFilter>(() =>
+    toViewFilter(getDefaultStatusFilter()),
+  );
+  const [ownerScope, setOwnerScope] = useState<OwnerScope>(() =>
+    getDefaultOwnerScope(),
+  );
   const [tagFilter, setTagFilter] = useState<TagFilter>("__all__");
   const [tasks, setTasks] = useState<TodoTask[]>([]);
   const [searchText, setSearchText] = useState("");
@@ -104,7 +117,7 @@ export default function ManageTasksCommand() {
       await showToast({
         style: Toast.Style.Failure,
         title: "Failed to load tasks",
-        message
+        message,
       });
     } finally {
       setIsLoading(false);
@@ -121,7 +134,7 @@ export default function ManageTasksCommand() {
         .filter((tag): tag is string => typeof tag === "string")
         .filter((tag) => !tag.startsWith("owner:"))
         .sort((left, right) => left.localeCompare(right)),
-    [tasks]
+    [tasks],
   );
 
   useEffect(() => {
@@ -142,14 +155,17 @@ export default function ManageTasksCommand() {
         })
         .filter((task) => matchesSearch(task, searchText))
         .sort(compareTasks),
-    [tasks, tagFilter, searchText]
+    [tasks, tagFilter, searchText],
   );
 
   const openTasks = filtered.filter((task) => task.status === "open");
   const doneTasks = filtered.filter((task) => task.status === "done");
 
   const onCompleteTask = async (task: TodoTask): Promise<void> => {
-    const toast = await showToast({ style: Toast.Style.Animated, title: "Completing task..." });
+    const toast = await showToast({
+      style: Toast.Style.Animated,
+      title: "Completing task...",
+    });
 
     try {
       await completeTask(task.id);
@@ -166,8 +182,18 @@ export default function ManageTasksCommand() {
 
   const commonActions = (
     <>
-      <Action title="Refresh" icon={Icon.ArrowClockwise} onAction={() => void loadTasks()} shortcut={{ modifiers: ["cmd"], key: "r" }} />
-      <Action title="Quick Add Task" icon={Icon.Plus} onAction={() => push(<AddTaskCommand />)} shortcut={{ modifiers: ["cmd"], key: "n" }} />
+      <Action
+        title="Refresh"
+        icon={Icon.ArrowClockwise}
+        onAction={() => void loadTasks()}
+        shortcut={{ modifiers: ["cmd"], key: "r" }}
+      />
+      <Action
+        title="Quick Add Task"
+        icon={Icon.Plus}
+        onAction={() => push(<AddTaskCommand />)}
+        shortcut={{ modifiers: ["cmd"], key: "n" }}
+      />
     </>
   );
 
@@ -188,7 +214,11 @@ export default function ManageTasksCommand() {
       searchText={searchText}
       onSearchTextChange={setSearchText}
       searchBarAccessory={
-        <List.Dropdown tooltip="Status" value={viewFilter} onChange={(value) => setViewFilter(value as ViewFilter)}>
+        <List.Dropdown
+          tooltip="Status"
+          value={viewFilter}
+          onChange={(value) => setViewFilter(value as ViewFilter)}
+        >
           <List.Dropdown.Item title="Open" value="open" />
           <List.Dropdown.Item title="Done" value="done" />
           <List.Dropdown.Item title="All" value="all" />
@@ -202,9 +232,18 @@ export default function ManageTasksCommand() {
           icon={Icon.Person}
           actions={
             <ActionPanel>
-              <Action title="Show All Tasks" onAction={() => setOwnerScope("all")} />
-              <Action title="Show My Tasks" onAction={() => setOwnerScope("user")} />
-              <Action title="Show Agent Tasks" onAction={() => setOwnerScope("agent")} />
+              <Action
+                title="Show All Tasks"
+                onAction={() => setOwnerScope("all")}
+              />
+              <Action
+                title="Show My Tasks"
+                onAction={() => setOwnerScope("user")}
+              />
+              <Action
+                title="Show Agent Tasks"
+                onAction={() => setOwnerScope("agent")}
+              />
               {commonActions}
             </ActionPanel>
           }
@@ -215,9 +254,16 @@ export default function ManageTasksCommand() {
           icon={Icon.Tag}
           actions={
             <ActionPanel>
-              <Action title="Use Any Tag" onAction={() => setTagFilter("__all__")} />
+              <Action
+                title="Use Any Tag"
+                onAction={() => setTagFilter("__all__")}
+              />
               {availableTags.map((tag) => (
-                <Action key={tag} title={`Filter by ${tag}`} onAction={() => setTagFilter(tag)} />
+                <Action
+                  key={tag}
+                  title={`Filter by ${tag}`}
+                  onAction={() => setTagFilter(tag)}
+                />
               ))}
               {commonActions}
             </ActionPanel>
@@ -234,8 +280,15 @@ export default function ManageTasksCommand() {
             accessories={accessoryForTask(task)}
             actions={
               <ActionPanel>
-                <Action title="Complete Task" icon={Icon.Checkmark} onAction={() => void onCompleteTask(task)} />
-                <Action.CopyToClipboard title="Copy Task ID" content={task.id} />
+                <Action
+                  title="Complete Task"
+                  icon={Icon.Checkmark}
+                  onAction={() => void onCompleteTask(task)}
+                />
+                <Action.CopyToClipboard
+                  title="Copy Task ID"
+                  content={task.id}
+                />
                 {commonActions}
               </ActionPanel>
             }
@@ -252,7 +305,10 @@ export default function ManageTasksCommand() {
             accessories={[{ icon: Icon.CheckCircle, text: "Done" }]}
             actions={
               <ActionPanel>
-                <Action.CopyToClipboard title="Copy Task ID" content={task.id} />
+                <Action.CopyToClipboard
+                  title="Copy Task ID"
+                  content={task.id}
+                />
                 {commonActions}
               </ActionPanel>
             }

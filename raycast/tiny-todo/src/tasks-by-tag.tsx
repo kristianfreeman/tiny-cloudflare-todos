@@ -1,4 +1,12 @@
-import { Action, ActionPanel, Icon, List, showToast, Toast, useNavigation } from "@raycast/api";
+import {
+  Action,
+  ActionPanel,
+  Icon,
+  List,
+  showToast,
+  Toast,
+  useNavigation,
+} from "@raycast/api";
 import { useEffect, useMemo, useState } from "react";
 import AddTaskCommand from "./add-task";
 import { completeTask, listTasks, type TaskStatus, type TodoTask } from "./api";
@@ -9,7 +17,8 @@ interface TasksByTagProps {
   };
 }
 
-const dueLabel = (task: TodoTask): string => (task.dueDate ? `Due ${task.dueDate}` : "No due date");
+const dueLabel = (task: TodoTask): string =>
+  task.dueDate ? `Due ${task.dueDate}` : "No due date";
 
 const compareTasks = (left: TodoTask, right: TodoTask): number => {
   const leftDue = left.dueDate ?? "9999-12-31";
@@ -39,7 +48,11 @@ export default function TasksByTagCommand(props: TasksByTagProps) {
       setTasks(nextTasks);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await showToast({ style: Toast.Style.Failure, title: "Failed to load tagged tasks", message });
+      await showToast({
+        style: Toast.Style.Failure,
+        title: "Failed to load tagged tasks",
+        message,
+      });
     } finally {
       setIsLoading(false);
     }
@@ -52,7 +65,10 @@ export default function TasksByTagCommand(props: TasksByTagProps) {
   const sortedTasks = useMemo(() => [...tasks].sort(compareTasks), [tasks]);
 
   const onCompleteTask = async (task: TodoTask): Promise<void> => {
-    const toast = await showToast({ style: Toast.Style.Animated, title: "Completing task..." });
+    const toast = await showToast({
+      style: Toast.Style.Animated,
+      title: "Completing task...",
+    });
     try {
       await completeTask(task.id);
       toast.style = Toast.Style.Success;
@@ -68,8 +84,18 @@ export default function TasksByTagCommand(props: TasksByTagProps) {
 
   const actions = (
     <>
-      <Action title="Refresh" icon={Icon.ArrowClockwise} onAction={() => void loadTasks()} shortcut={{ modifiers: ["cmd"], key: "r" }} />
-      <Action title="Quick Add Task" icon={Icon.Plus} onAction={() => push(<AddTaskCommand />)} shortcut={{ modifiers: ["cmd"], key: "n" }} />
+      <Action
+        title="Refresh"
+        icon={Icon.ArrowClockwise}
+        onAction={() => void loadTasks()}
+        shortcut={{ modifiers: ["cmd"], key: "r" }}
+      />
+      <Action
+        title="Quick Add Task"
+        icon={Icon.Plus}
+        onAction={() => push(<AddTaskCommand />)}
+        shortcut={{ modifiers: ["cmd"], key: "n" }}
+      />
     </>
   );
 
@@ -77,9 +103,15 @@ export default function TasksByTagCommand(props: TasksByTagProps) {
     <List
       isLoading={isLoading}
       navigationTitle={tag ? `Tag: ${tag}` : "Tasks by Tag"}
-      searchBarPlaceholder={tag ? `Tasks tagged ${tag}` : "Enter a tag argument"}
+      searchBarPlaceholder={
+        tag ? `Tasks tagged ${tag}` : "Enter a tag argument"
+      }
       searchBarAccessory={
-        <List.Dropdown tooltip="Status" value={status} onChange={(value) => setStatus(value as TaskStatus)}>
+        <List.Dropdown
+          tooltip="Status"
+          value={status}
+          onChange={(value) => setStatus(value as TaskStatus)}
+        >
           <List.Dropdown.Item title="Open" value="open" />
           <List.Dropdown.Item title="Done" value="done" />
           <List.Dropdown.Item title="All" value="all" />
@@ -94,7 +126,12 @@ export default function TasksByTagCommand(props: TasksByTagProps) {
           accessories={[{ text: dueLabel(task) }]}
           actions={
             <ActionPanel>
-              {task.status === "open" ? <Action title="Complete Task" onAction={() => void onCompleteTask(task)} /> : null}
+              {task.status === "open" ? (
+                <Action
+                  title="Complete Task"
+                  onAction={() => void onCompleteTask(task)}
+                />
+              ) : null}
               <Action.CopyToClipboard title="Copy Task ID" content={task.id} />
               {actions}
             </ActionPanel>

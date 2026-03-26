@@ -1,4 +1,11 @@
-import { Action, ActionPanel, Form, showToast, Toast, useNavigation } from "@raycast/api";
+import {
+  Action,
+  ActionPanel,
+  Form,
+  showToast,
+  Toast,
+  useNavigation,
+} from "@raycast/api";
 import { createTask } from "./api";
 
 interface AddTaskFormValues {
@@ -37,18 +44,24 @@ export default function AddTaskCommand() {
 
   const onSubmit = async (values: AddTaskFormValues): Promise<void> => {
     if (!values.title?.trim()) {
-      await showToast({ style: Toast.Style.Failure, title: "Title is required" });
+      await showToast({
+        style: Toast.Style.Failure,
+        title: "Title is required",
+      });
       return;
     }
 
-    const toast = await showToast({ style: Toast.Style.Animated, title: "Creating task..." });
+    const toast = await showToast({
+      style: Toast.Style.Animated,
+      title: "Creating task...",
+    });
 
     try {
       await createTask({
         title: values.title.trim(),
         note: values.note?.trim() || undefined,
         dueDate: values.dueDate ? formatDateForApi(values.dueDate) : undefined,
-        tags: parseTags(values.tags)
+        tags: parseTags(values.tags),
       });
       toast.style = Toast.Style.Success;
       toast.title = "Task created";
@@ -70,9 +83,21 @@ export default function AddTaskCommand() {
       }
     >
       <Form.TextField id="title" title="Title" placeholder="Write docs" />
-      <Form.TextArea id="note" title="Note" placeholder="Optional task details" />
-      <Form.DatePicker id="dueDate" title="Due Date" type={Form.DatePicker.Type.Date} />
-      <Form.TextField id="tags" title="Tags" placeholder="owner:user,project:todos" />
+      <Form.TextArea
+        id="note"
+        title="Note"
+        placeholder="Optional task details"
+      />
+      <Form.DatePicker
+        id="dueDate"
+        title="Due Date"
+        type={Form.DatePicker.Type.Date}
+      />
+      <Form.TextField
+        id="tags"
+        title="Tags"
+        placeholder="owner:user,project:todos"
+      />
     </Form>
   );
 }
