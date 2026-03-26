@@ -1,0 +1,86 @@
+name: Raycast Extension
+
+on:
+  push:
+    paths:
+      - "raycast/tiny-todo/**"
+      - ".github/workflows/raycast-extension.yml"
+  pull_request:
+    paths:
+      - "raycast/tiny-todo/**"
+      - ".github/workflows/raycast-extension.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: raycast/tiny-todo/package-lock.json
+
+      - name: Install extension dependencies
+        run: npm ci
+        working-directory: raycast/tiny-todo
+
+      - name: Build extension
+        run: npm run build
+        working-directory: raycast/tiny-todo
+
+      - name: Upload extension build artifact
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tiny-todo-raycast-dist-${{ github.sha }}
+          path: raycast/tiny-todo/dist
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create installable extension archive
+        if: github.event_name == 'push'
+        run: |
+          cd raycast
+          zip -r "../tiny-todo-raycast-extension-${GITHUB_SHA}.zip" tiny-todo \
+            -x "tiny-todo/node_modules/*" "tiny-todo/dist/*"
+
+      - name: Upload installable extension archive
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tiny-todo-raycast-extension-${{ github.sha }}
+          path: tiny-todo-raycast-extension-${{ github.sha }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    runs-on: macos-latest
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.RAYCAST_ACCESS_TOKEN != ''
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: raycast/tiny-todo/package-lock.json
+
+      - name: Install extension dependencies
+        run: npm ci
+        working-directory: raycast/tiny-todo
+
+      - name: Publish extension
+        run: npm run publish
+        working-directory: raycast/tiny-todo
+        env:
+          RAYCAST_ACCESS_TOKEN: ${{ secrets.RAYCAST_ACCESS_TOKEN }}

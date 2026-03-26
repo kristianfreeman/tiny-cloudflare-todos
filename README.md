@@ -122,6 +122,17 @@ GitHub Actions runs the same baseline for every push and pull request:
 
 `db:migrate:sanity` applies local migrations into `.wrangler/state/ci` to validate migration SQL in a clean CI context.
 
+## Raycast extension
+
+This repo now includes a Raycast extension in `raycast/tiny-todo`.
+
+- It uses Raycast Preferences for setup (`apiBaseUrl` and `apiToken` required).
+- Commands included: `Manage Tasks` and `Add Task`.
+- CI build/publish pipeline: `.github/workflows/raycast-extension.yml`.
+  - Build runs on pull requests and pushes touching extension files.
+  - Every push uploads downloadable artifacts in GitHub Actions (`dist` and installable extension zip).
+  - Publish runs on `main` pushes when `RAYCAST_ACCESS_TOKEN` secret is configured.
+
 ## API endpoints
 
 All endpoints (except `GET /health`) require `Authorization: Bearer <token>`. The bearer token is

@@ -1,0 +1,89 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "tiny-todo",
+  "title": "Tiny Todo",
+  "description": "Create, browse, and complete tasks from a Tiny Todo API",
+  "icon": "icon.png",
+  "author": "kristianfreeman",
+  "license": "MIT",
+  "categories": [
+    "Productivity",
+    "Developer Tools"
+  ],
+  "platforms": [
+    "macOS",
+    "Windows"
+  ],
+  "commands": [
+    {
+      "name": "manage-tasks",
+      "title": "Manage Tasks",
+      "description": "Browse open and done tasks and mark tasks complete",
+      "mode": "view"
+    },
+    {
+      "name": "add-task",
+      "title": "Add Task",
+      "description": "Create a task in Tiny Todo",
+      "mode": "view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "apiBaseUrl",
+      "type": "textfield",
+      "required": true,
+      "title": "API Base URL",
+      "description": "Tiny Todo API base URL",
+      "placeholder": "https://tiny-todo-api.example.workers.dev"
+    },
+    {
+      "name": "apiToken",
+      "type": "password",
+      "required": true,
+      "title": "API Token",
+      "description": "Bearer token used for Tiny Todo API requests"
+    },
+    {
+      "name": "defaultStatus",
+      "type": "dropdown",
+      "required": false,
+      "title": "Default Status Filter",
+      "description": "Initial status filter when opening Manage Tasks",
+      "default": "open",
+      "data": [
+        {
+          "title": "Open",
+          "value": "open"
+        },
+        {
+          "title": "Done",
+          "value": "done"
+        },
+        {
+          "title": "All",
+          "value": "all"
+        }
+      ]
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.99.2",
+    "react": "19.0.0"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^2.0.5",
+    "@types/node": "^22.13.10",
+    "@types/react": "19.0.10",
+    "eslint": "^9.20.1",
+    "prettier": "^3.5.0",
+    "typescript": "^5.8.2"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "ray develop",
+    "lint": "ray lint",
+    "fix-lint": "ray lint --fix",
+    "publish": "npx @raycast/api@latest publish"
+  }
+}
