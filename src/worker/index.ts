@@ -1,6 +1,7 @@
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
-import { apiTokens, idempotencyRecords, recurrenceRules, tasks, users } from "../../drizzle/schema";
+import { apiTokens, auditEvents, idempotencyRecords, recurrenceRules, tasks, users } from "../../drizzle/schema";
+import { logError, logInfo, logWarn } from "./observability";
 import type {
   CreateRecurrenceRuleInput,
   CreateTaskInput,
@@ -19,6 +20,12 @@ interface AuthContext {
   userId: string;
 }
 
+interface RequestContext {
+  requestId: string;
+  method: string;
+  path: string;
+}
+
 interface ApiError {
   error: string;
 }
@@ -33,6 +40,7 @@ const error = (message: string, status = 400): Response => json({ error: message
 
 const MAX_MATERIALIZATION_STEPS = 366;
 const IDEMPOTENCY_HEADER = "idempotency-key";
+const REQUEST_ID_HEADER = "x-request-id";
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 const IDEMPOTENCY_MAX_KEY_LENGTH = 200;
 
@@ -179,7 +187,66 @@ const mapRule = (row: typeof recurrenceRules.$inferSelect): RecurrenceRuleDTO =>
   updatedAt: row.updatedAt
 });
 
-const dbForEnv = (env: Env) => drizzle(env.DB, { schema: { users, apiTokens, tasks, recurrenceRules, idempotencyRecords } });
+const dbForEnv = (env: Env) =>
+  drizzle(env.DB, { schema: { users, apiTokens, tasks, recurrenceRules, idempotencyRecords, auditEvents } });
+
+const isSafeRequestId = (value: string): boolean => /^[a-zA-Z0-9._:-]{8,128}$/.test(value);
+
+const resolveRequestId = (request: Request): string => {
+  const candidate = request.headers.get(REQUEST_ID_HEADER)?.trim();
+  if (candidate && isSafeRequestId(candidate)) {
+    return candidate;
+  }
+  return crypto.randomUUID();
+};
+
+const withRequestIdHeader = (response: Response, requestId: string): Response => {
+  const headers = new Headers(response.headers);
+  headers.set(REQUEST_ID_HEADER, requestId);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+};
+
+const toRequestContext = (request: Request): RequestContext => {
+  const url = new URL(request.url);
+  return {
+    requestId: resolveRequestId(request),
+    method: request.method,
+    path: url.pathname
+  };
+};
+
+type AuditEventType =
+  | "task.created"
+  | "task.updated"
+  | "task.completed"
+  | "recurrence_rule.created"
+  | "recurrence_rule.updated";
+
+const writeAuditEvent = async (
+  env: Env,
+  requestContext: RequestContext,
+  eventType: AuditEventType,
+  actorUserId: string,
+  resourceType: "task" | "recurrence_rule",
+  resourceId: string,
+  metadata: Record<string, unknown> | null = null
+): Promise<void> => {
+  const db = dbForEnv(env);
+  await db.insert(auditEvents).values({
+    id: crypto.randomUUID(),
+    eventType,
+    actorUserId,
+    resourceType,
+    resourceId,
+    requestId: requestContext.requestId,
+    metadata,
+    createdAt: new Date().toISOString()
+  });
+};
 
 const toHex = (bytes: ArrayBuffer): string =>
   Array.from(new Uint8Array(bytes))
@@ -318,14 +385,30 @@ const withIdempotency = async (
   return response;
 };
 
-const requireBearerAuth = async (request: Request, env: Env): Promise<AuthContext | Response> => {
+const requireBearerAuth = async (request: Request, env: Env, requestContext: RequestContext): Promise<AuthContext | Response> => {
   const auth = request.headers.get("authorization");
   if (!auth?.startsWith("Bearer ")) {
+    logWarn({
+      event: "auth.failure",
+      requestId: requestContext.requestId,
+      method: requestContext.method,
+      path: requestContext.path,
+      status: 401,
+      details: { reason: "missing_bearer_token" }
+    });
     return error("missing bearer token", 401);
   }
 
   const token = auth.slice("Bearer ".length).trim();
   if (!token) {
+    logWarn({
+      event: "auth.failure",
+      requestId: requestContext.requestId,
+      method: requestContext.method,
+      path: requestContext.path,
+      status: 401,
+      details: { reason: "empty_bearer_token" }
+    });
     return error("invalid bearer token", 401);
   }
 
@@ -339,6 +422,14 @@ const requireBearerAuth = async (request: Request, env: Env): Promise<AuthContex
     .where(and(eq(apiTokens.tokenHash, tokenHash), isNull(apiTokens.revokedAt)));
 
   if (!tokenRow || !tokenRow.userActive) {
+    logWarn({
+      event: "auth.failure",
+      requestId: requestContext.requestId,
+      method: requestContext.method,
+      path: requestContext.path,
+      status: 401,
+      details: { reason: "token_not_found_or_inactive_user" }
+    });
     return error("invalid bearer token", 401);
   }
 
@@ -349,7 +440,12 @@ const requireBearerAuth = async (request: Request, env: Env): Promise<AuthContex
   };
 };
 
-const createTask = async (request: Request, env: Env, auth: AuthContext): Promise<Response> => {
+const createTask = async (
+  request: Request,
+  env: Env,
+  auth: AuthContext,
+  requestContext: RequestContext
+): Promise<Response> => {
   const payload = await parseJsonBody<CreateTaskInput>(request);
   if (!payload?.title?.trim()) {
     return error("title is required", 422);
@@ -379,6 +475,23 @@ const createTask = async (request: Request, env: Env, auth: AuthContext): Promis
   if (!created[0]) {
     return error("failed to create task", 500);
   }
+
+  await writeAuditEvent(env, requestContext, "task.created", auth.userId, "task", id, {
+    status: "open",
+    dueDate: payload.dueDate ?? null,
+    recurrenceRuleId: null
+  });
+  logInfo({
+    event: "task.mutated",
+    requestId: requestContext.requestId,
+    method: requestContext.method,
+    path: requestContext.path,
+    userId: auth.userId,
+    resourceType: "task",
+    resourceId: id,
+    status: 201,
+    details: { action: "create" }
+  });
   return json({ task: mapTask(created[0]) }, 201);
 };
 
@@ -412,7 +525,13 @@ const listTasks = async (request: Request, env: Env, auth: AuthContext): Promise
   return json({ tasks: rows.map(mapTask) });
 };
 
-const updateTask = async (request: Request, env: Env, auth: AuthContext, taskId: string): Promise<Response> => {
+const updateTask = async (
+  request: Request,
+  env: Env,
+  auth: AuthContext,
+  taskId: string,
+  requestContext: RequestContext
+): Promise<Response> => {
   const payload = await parseJsonBody<UpdateTaskInput>(request);
   if (!payload) {
     return error("invalid JSON body", 422);
@@ -447,10 +566,30 @@ const updateTask = async (request: Request, env: Env, auth: AuthContext, taskId:
   if (!updated[0]) {
     return error("task not found", 404);
   }
+
+  await writeAuditEvent(env, requestContext, "task.updated", auth.userId, "task", taskId, {
+    fields: Object.keys(payload)
+  });
+  logInfo({
+    event: "task.mutated",
+    requestId: requestContext.requestId,
+    method: requestContext.method,
+    path: requestContext.path,
+    userId: auth.userId,
+    resourceType: "task",
+    resourceId: taskId,
+    status: 200,
+    details: { action: "update", fields: Object.keys(payload) }
+  });
   return json({ task: mapTask(updated[0]) });
 };
 
-const completeTask = async (env: Env, auth: AuthContext, taskId: string): Promise<Response> => {
+const completeTask = async (
+  env: Env,
+  auth: AuthContext,
+  taskId: string,
+  requestContext: RequestContext
+): Promise<Response> => {
   const db = dbForEnv(env);
   const now = new Date().toISOString();
 
@@ -463,10 +602,30 @@ const completeTask = async (env: Env, auth: AuthContext, taskId: string): Promis
   if (!updated[0]) {
     return error("task not found", 404);
   }
+
+  await writeAuditEvent(env, requestContext, "task.completed", auth.userId, "task", taskId, {
+    status: "done"
+  });
+  logInfo({
+    event: "task.mutated",
+    requestId: requestContext.requestId,
+    method: requestContext.method,
+    path: requestContext.path,
+    userId: auth.userId,
+    resourceType: "task",
+    resourceId: taskId,
+    status: 200,
+    details: { action: "complete" }
+  });
   return json({ task: mapTask(updated[0]) });
 };
 
-const createRecurrenceRule = async (request: Request, env: Env, auth: AuthContext): Promise<Response> => {
+const createRecurrenceRule = async (
+  request: Request,
+  env: Env,
+  auth: AuthContext,
+  requestContext: RequestContext
+): Promise<Response> => {
   const payload = await parseJsonBody<CreateRecurrenceRuleInput>(request);
   if (!payload?.titleTemplate?.trim()) {
     return error("titleTemplate is required", 422);
@@ -524,6 +683,23 @@ const createRecurrenceRule = async (request: Request, env: Env, auth: AuthContex
   if (!created[0]) {
     return error("failed to create recurrence rule", 500);
   }
+
+  await writeAuditEvent(env, requestContext, "recurrence_rule.created", auth.userId, "recurrence_rule", id, {
+    cadence: payload.cadence,
+    interval,
+    timezone
+  });
+  logInfo({
+    event: "recurrence_rule.mutated",
+    requestId: requestContext.requestId,
+    method: requestContext.method,
+    path: requestContext.path,
+    userId: auth.userId,
+    resourceType: "recurrence_rule",
+    resourceId: id,
+    status: 201,
+    details: { action: "create" }
+  });
   return json({ recurrenceRule: mapRule(created[0]) }, 201);
 };
 
@@ -542,7 +718,8 @@ const updateRecurrenceRule = async (
   request: Request,
   env: Env,
   auth: AuthContext,
-  ruleId: string
+  ruleId: string,
+  requestContext: RequestContext
 ): Promise<Response> => {
   const payload = await parseJsonBody<UpdateRecurrenceRuleInput>(request);
   if (!payload) {
@@ -598,13 +775,29 @@ const updateRecurrenceRule = async (
     return error("recurrence rule not found", 404);
   }
 
+  await writeAuditEvent(env, requestContext, "recurrence_rule.updated", auth.userId, "recurrence_rule", ruleId, {
+    fields: Object.keys(payload)
+  });
+  logInfo({
+    event: "recurrence_rule.mutated",
+    requestId: requestContext.requestId,
+    method: requestContext.method,
+    path: requestContext.path,
+    userId: auth.userId,
+    resourceType: "recurrence_rule",
+    resourceId: ruleId,
+    status: 200,
+    details: { action: "update", fields: Object.keys(payload) }
+  });
+
   return json({ recurrenceRule: mapRule(updated[0]) });
 };
 
 const materializeRecurrences = async (
   env: Env,
   onDate?: string,
-  userId?: string
+  userId?: string,
+  requestContext?: RequestContext
 ): Promise<{ created: number; rulesProcessed: number }> => {
   const db = dbForEnv(env);
   const nowDate = new Date();
@@ -667,16 +860,37 @@ const materializeRecurrences = async (
       .where(and(eq(recurrenceRules.id, rule.id), eq(recurrenceRules.userId, rule.userId)));
   }
 
+  if (requestContext) {
+    logInfo({
+      event: "recurrence.materialization.run",
+      requestId: requestContext.requestId,
+      method: requestContext.method,
+      path: requestContext.path,
+      ...(userId ? { userId } : {}),
+      status: 200,
+      details: {
+        created,
+        rulesProcessed,
+        targetDate: onDate ?? null
+      }
+    });
+  }
+
   return { created, rulesProcessed };
 };
 
-const runMaterialization = async (request: Request, env: Env, auth: AuthContext): Promise<Response> =>
+const runMaterialization = async (
+  request: Request,
+  env: Env,
+  auth: AuthContext,
+  requestContext: RequestContext
+): Promise<Response> =>
   withIdempotency(request, env, auth, async () => {
     const body = await parseJsonBody<{ date?: string }>(request);
     if (body?.date && !isValidIsoDate(body.date)) {
       return error("date must be YYYY-MM-DD", 422);
     }
-    const result = await materializeRecurrences(env, body?.date, auth.userId);
+    const result = await materializeRecurrences(env, body?.date, auth.userId, requestContext);
     return json({ ok: true, ...result });
   });
 
@@ -710,58 +924,92 @@ const routeRecurrenceRuleId = (pathname: string): string | null => {
   return decodeURIComponent(match[1]);
 };
 
-const handleFetch = async (request: Request, env: Env): Promise<Response> => {
+const handleFetch = async (request: Request, env: Env, requestContext: RequestContext): Promise<Response> => {
   const { pathname } = new URL(request.url);
 
   if (pathname === "/health" && request.method === "GET") {
-    return json({ ok: true });
+    return withRequestIdHeader(json({ ok: true }), requestContext.requestId);
   }
 
-  const authResult = await requireBearerAuth(request, env);
+  const authResult = await requireBearerAuth(request, env, requestContext);
   if (authResult instanceof Response) {
-    return authResult;
+    return withRequestIdHeader(authResult, requestContext.requestId);
   }
   const auth = authResult;
 
   if (pathname === "/tasks" && request.method === "POST") {
-    return withIdempotency(request, env, auth, () => createTask(request, env, auth));
+    return withRequestIdHeader(
+      await withIdempotency(request, env, auth, () => createTask(request, env, auth, requestContext)),
+      requestContext.requestId
+    );
   }
   if (pathname === "/tasks" && request.method === "GET") {
-    return listTasks(request, env, auth);
+    return withRequestIdHeader(await listTasks(request, env, auth), requestContext.requestId);
   }
 
   const taskRoute = routeTaskId(pathname);
   if (taskRoute && request.method === "PATCH" && !taskRoute.complete) {
-    return updateTask(request, env, auth, taskRoute.taskId);
+    return withRequestIdHeader(
+      await updateTask(request, env, auth, taskRoute.taskId, requestContext),
+      requestContext.requestId
+    );
   }
   if (taskRoute && request.method === "POST" && taskRoute.complete) {
-    return completeTask(env, auth, taskRoute.taskId);
+    return withRequestIdHeader(await completeTask(env, auth, taskRoute.taskId, requestContext), requestContext.requestId);
   }
 
   if (pathname === "/recurrence-rules" && request.method === "POST") {
-    return createRecurrenceRule(request, env, auth);
+    return withRequestIdHeader(await createRecurrenceRule(request, env, auth, requestContext), requestContext.requestId);
   }
   if (pathname === "/recurrence-rules" && request.method === "GET") {
-    return listRecurrenceRules(env, auth);
+    return withRequestIdHeader(await listRecurrenceRules(env, auth), requestContext.requestId);
   }
 
   const recurrenceRuleId = routeRecurrenceRuleId(pathname);
   if (recurrenceRuleId && request.method === "PATCH") {
-    return updateRecurrenceRule(request, env, auth, recurrenceRuleId);
+    return withRequestIdHeader(
+      await updateRecurrenceRule(request, env, auth, recurrenceRuleId, requestContext),
+      requestContext.requestId
+    );
   }
 
   if (pathname === "/jobs/materialize-recurrence" && request.method === "POST") {
-    return runMaterialization(request, env, auth);
+    return withRequestIdHeader(await runMaterialization(request, env, auth, requestContext), requestContext.requestId);
   }
 
-  return error("not found", 404);
+  return withRequestIdHeader(error("not found", 404), requestContext.requestId);
 };
 
 export default {
-  fetch(request: Request, env: Env): Promise<Response> {
-    return handleFetch(request, env);
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const requestContext = toRequestContext(request);
+    try {
+      return await handleFetch(request, env, requestContext);
+    } catch (caughtError) {
+      const errorToLog =
+        caughtError instanceof Error
+          ? caughtError
+          : new Error(typeof caughtError === "string" ? caughtError : "unknown worker error");
+      logError({
+        event: "request.error",
+        requestId: requestContext.requestId,
+        method: requestContext.method,
+        path: requestContext.path,
+        status: 500,
+        error: {
+          name: errorToLog.name,
+          message: errorToLog.message
+        }
+      });
+      return withRequestIdHeader(error("internal server error", 500), requestContext.requestId);
+    }
   },
   scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): void {
-    ctx.waitUntil(materializeRecurrences(env));
+    const requestContext: RequestContext = {
+      requestId: crypto.randomUUID(),
+      method: "SCHEDULED",
+      path: "/jobs/materialize-recurrence"
+    };
+    ctx.waitUntil(materializeRecurrences(env, undefined, undefined, requestContext));
   }
 };

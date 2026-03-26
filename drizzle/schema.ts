@@ -73,8 +73,22 @@ export const idempotencyRecords = sqliteTable(
   (table) => [primaryKey({ columns: [table.userId, table.idempotencyKey, table.method, table.path] })]
 );
 
+export const auditEvents = sqliteTable("audit_events", {
+  id: text("id").primaryKey(),
+  eventType: text("event_type").notNull(),
+  actorUserId: text("actor_user_id")
+    .notNull()
+    .references(() => users.id),
+  resourceType: text("resource_type").notNull(),
+  resourceId: text("resource_id").notNull(),
+  requestId: text("request_id").notNull(),
+  metadata: text("metadata", { mode: "json" }).$type<Record<string, unknown> | null>(),
+  createdAt: text("created_at").notNull()
+});
+
 export type TaskRow = typeof tasks.$inferSelect;
 export type RecurrenceRuleRow = typeof recurrenceRules.$inferSelect;
 export type IdempotencyRecordRow = typeof idempotencyRecords.$inferSelect;
+export type AuditEventRow = typeof auditEvents.$inferSelect;
 export type UserRow = typeof users.$inferSelect;
 export type ApiTokenRow = typeof apiTokens.$inferSelect;

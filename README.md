@@ -9,6 +9,7 @@ Small REST-first todo platform on Cloudflare Workers + D1 with Drizzle ORM and a
 - Task endpoints: create, list, update, complete.
 - Recurrence endpoints: create/list/update rules and materialization job endpoint.
 - Idempotent POST support for task creation and recurrence materialization retries.
+- Phase 2 baseline observability: request IDs, structured JSON logs, and mutation audit events.
 - Daily cron trigger (`0 0 * * *`) that materializes recurring tasks.
 - CLI: `add`, `list`, `done`, `recur`, `sync-agent`, `token-hash`.
 - Deterministic local markdown snapshot for agent prompt ingestion.
@@ -77,6 +78,7 @@ npm test
 - Task CRUD lifecycle (`create`, `list`, `update`, `complete`) through worker + Drizzle + D1.
 - Recurrence materialization backlog path and `nextRunDate` advancement.
 - CLI `sync-agent` deterministic snapshot output shape and ordering.
+- Request ID propagation and audit-event insertions for key mutation flows.
 
 Tests use Vitest with a small local D1 harness built from Miniflare D1 bindings.
 
@@ -139,6 +141,27 @@ curl -sS -X POST "$TODO_API_URL/jobs/materialize-recurrence" \
   -H "Content-Type: application/json" \
   -d '{"date":"2026-03-25"}'
 ```
+
+## Observability and audit baseline (Phase 2)
+
+- Every worker response includes `x-request-id`.
+- If a client sends `x-request-id`, the worker propagates it; otherwise it generates a UUID.
+- Structured logs are emitted as JSON with a consistent shape:
+  - `ts`, `level`, `event`, `requestId`, `method`, `path`, optional `userId`, `resourceType`, `resourceId`, `status`, and `details`/`error`.
+- Baseline log events cover:
+  - auth failures (`auth.failure`),
+  - task mutations (`task.mutated`),
+  - recurrence materialization runs (`recurrence.materialization.run`),
+  - unhandled worker errors (`request.error`).
+
+### `audit_events` table
+
+- Migration `0004_audit_events.sql` adds `audit_events`.
+- Core mutation audit events are recorded with user and resource identity:
+  - `task.created`, `task.updated`, `task.completed`
+  - `recurrence_rule.created`, `recurrence_rule.updated`
+- Audit rows include:
+  - `event_type`, `actor_user_id`, `resource_type`, `resource_id`, `request_id`, optional `metadata`, `created_at`.
 
 ## Recurrence behavior
 
