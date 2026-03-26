@@ -43,7 +43,7 @@ Deployed API: https://tiny-todo-api.signalnerve.workers.dev
    TOKEN="change-me-for-local-dev"
    TOKEN_HASH=$(npm run -s cli -- token-hash "$TOKEN")
 
-   npx wrangler d1 execute todos --local --command "
+   npx wrangler d1 execute tiny-todo-api --local --command "
      INSERT OR IGNORE INTO users (id, email, display_name, active, created_at, updated_at)
      VALUES ('local-dev-user', 'local@example.test', 'Local Dev', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
 

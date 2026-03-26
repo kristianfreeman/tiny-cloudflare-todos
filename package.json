@@ -11,9 +11,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
-    "db:migrate:local": "wrangler d1 migrations apply todos --local",
-    "db:migrate:sanity": "wrangler d1 migrations apply todos --local --persist-to .wrangler/state/ci",
-    "db:migrate:remote": "wrangler d1 migrations apply todos --remote",
+    "db:migrate:local": "wrangler d1 migrations apply tiny-todo-api --local",
+    "db:migrate:sanity": "wrangler d1 migrations apply tiny-todo-api --local --persist-to .wrangler/state/ci",
+    "db:migrate:remote": "wrangler d1 migrations apply tiny-todo-api --remote",
     "cli": "tsx src/cli/index.ts"
   },
   "dependencies": {
