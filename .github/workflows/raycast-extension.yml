@@ -34,15 +34,6 @@ jobs:
         run: npm run build
         working-directory: raycast/tiny-todo
 
-      - name: Upload extension build artifact
-        if: github.event_name == 'push'
-        uses: actions/upload-artifact@v4
-        with:
-          name: tiny-todo-raycast-dist-${{ github.sha }}
-          path: raycast/tiny-todo/dist
-          if-no-files-found: error
-          retention-days: 14
-
       - name: Create installable extension archive
         if: github.event_name == 'push'
         run: |

@@ -131,7 +131,7 @@ This repo now includes a Raycast extension in `raycast/tiny-todo`.
 - Commands included: `Manage Tasks` and `Add Task`.
 - CI build/publish pipeline: `.github/workflows/raycast-extension.yml`.
   - Build runs on pull requests and pushes touching extension files.
-  - Every push uploads downloadable artifacts in GitHub Actions (`dist` and installable extension zip).
+  - Every push uploads a downloadable installable extension zip in GitHub Actions.
   - Publish runs on `main` pushes when `RAYCAST_ACCESS_TOKEN` secret is configured.
 
 ## API endpoints
