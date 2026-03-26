@@ -101,6 +101,7 @@ SHA-256 hashed and looked up in `api_tokens.token_hash`; requests run with that 
 - `GET /health`
 - `POST /tasks`
 - `GET /tasks?status=open|done|all&limit=100&offset=0&listId=<optional-list-id>`
+- `GET /tasks?status=open|done|all&limit=100&offset=0&listId=<optional-list-id>&search=&due-before=&due-after=&sort=`
 - `PATCH /tasks/:taskId`
 - `POST /tasks/:taskId/complete`
 - `POST /lists`
@@ -121,6 +122,33 @@ SHA-256 hashed and looked up in `api_tokens.token_hash`; requests run with that 
 - **Viewer** can only read list data.
 - Existing single-tenant rows are backfilled into per-user default lists (`default:<user_id>`) in
   `0004_lists_and_memberships.sql`.
+
+### `GET /tasks` query options (Phase 2)
+
+- `status` (optional): `open` (default), `done`, or `all`.
+- `limit` (optional): defaults to `100`, clamped to `1..500`.
+- `offset` (optional): defaults to `0`, clamped to `>= 0`.
+- `search` (optional): case-insensitive contains match across `title` and `note`.
+- `due-before` / `due-after` (optional): ISO date (`YYYY-MM-DD`) bounds against `dueDate`.
+- `listId` / `list_id` (optional): exact match by task `listId`.
+- `sort` (optional): `default`, `due_date_asc`, `due_date_desc`, `created_at_asc`, `created_at_desc`.
+
+`default` sort preserves the original ordering semantics:
+
+- `status=all`: `status ASC, dueDate ASC, createdAt ASC, id ASC`
+- `status=open|done`: `dueDate ASC, createdAt ASC, id ASC`
+
+### `GET /tasks` examples
+
+```bash
+# Search in title/note
+curl -sS "$TODO_API_URL/tasks?status=all&search=rent" \
+  -H "Authorization: Bearer $TODO_API_TOKEN"
+
+# Filter by date window + list + explicit sort
+curl -sS "$TODO_API_URL/tasks?status=open&due-after=2026-03-01&due-before=2026-03-31&listId=<list-id>&sort=due_date_desc&limit=50&offset=0" \
+  -H "Authorization: Bearer $TODO_API_TOKEN"
+```
 
 ## Idempotency keys (Phase 1)
 

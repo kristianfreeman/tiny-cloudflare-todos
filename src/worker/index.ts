@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lte, sql, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import {
   apiTokens,
@@ -18,7 +18,9 @@ import type {
   ListDTO,
   ListMembershipDTO,
   ListRole,
+  ListTasksResponse,
   RecurrenceRuleDTO,
+  TaskSort,
   TaskDTO,
   TaskStatus,
   UpsertListMembershipInput,
@@ -64,6 +66,7 @@ const LIST_ROLE_RANK: Record<ListRole, number> = {
   editor: 2,
   viewer: 1
 };
+const TASK_SORTS: readonly TaskSort[] = ["default", "due_date_asc", "due_date_desc", "created_at_asc", "created_at_desc"];
 
 const isIsoDate = (value: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(value);
 
@@ -89,6 +92,10 @@ const parseIsoDate = (value: string): { year: number; month: number; day: number
 };
 
 const isValidIsoDate = (value: string): boolean => parseIsoDate(value) !== null;
+
+const isTaskSort = (value: string): value is TaskSort => TASK_SORTS.includes(value as TaskSort);
+
+const escapeLike = (value: string): string => value.replace(/[\\%_]/g, (char) => `\\${char}`);
 
 const isValidTimeZone = (value: string): boolean => {
   try {
@@ -589,6 +596,10 @@ const createTask = async (
     return error("dueDate must be YYYY-MM-DD", 422);
   }
 
+  if (payload.listId !== undefined && !payload.listId.trim()) {
+    return error("listId cannot be empty", 422);
+  }
+
   const db = dbForEnv(env);
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
@@ -638,13 +649,33 @@ const createTask = async (
 const listTasks = async (request: Request, env: Env, auth: AuthContext): Promise<Response> => {
   const db = dbForEnv(env);
   const url = new URL(request.url);
-  const status = (url.searchParams.get("status") ?? "open").toLowerCase();
+  const statusQuery = (url.searchParams.get("status") ?? "open").toLowerCase();
+  const status: TaskStatus | "all" = statusQuery === "all" ? "all" : statusQuery === "done" ? "done" : "open";
   const limit = Number(url.searchParams.get("limit") ?? "100");
   const offset = Number(url.searchParams.get("offset") ?? "0");
-  const listId = url.searchParams.get("listId")?.trim() || null;
+  const listIdParam = url.searchParams.get("listId") ?? url.searchParams.get("list_id");
+  const search = url.searchParams.get("search")?.trim() ?? "";
+  const dueBefore = url.searchParams.get("due-before")?.trim() ?? null;
+  const dueAfter = url.searchParams.get("due-after")?.trim() ?? null;
+  const listId = listIdParam?.trim() ?? null;
+  const sortQuery = (url.searchParams.get("sort") ?? "default").trim().toLowerCase();
+
+  if (dueBefore && !isValidIsoDate(dueBefore)) {
+    return error("due-before must be YYYY-MM-DD", 422);
+  }
+  if (dueAfter && !isValidIsoDate(dueAfter)) {
+    return error("due-after must be YYYY-MM-DD", 422);
+  }
+  if (listId !== null && !listId) {
+    return error("list_id cannot be empty", 422);
+  }
+  if (!isTaskSort(sortQuery)) {
+    return error(`sort must be one of: ${TASK_SORTS.join(", ")}`, 422);
+  }
 
   const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(500, Math.floor(limit))) : 100;
   const safeOffset = Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0;
+  const sort = sortQuery;
 
   let allowedListIds: string[];
   if (listId) {
@@ -661,26 +692,48 @@ const listTasks = async (request: Request, env: Env, auth: AuthContext): Promise
     return json({ tasks: [] });
   }
 
-  const rows =
-    status === "all"
-      ? await db
-          .select()
-          .from(tasks)
-          .where(inArray(tasks.listId, allowedListIds))
-          .orderBy(asc(tasks.status), asc(tasks.dueDate), asc(tasks.createdAt), asc(tasks.id))
-          .limit(safeLimit)
-          .offset(safeOffset)
-      : await db
-          .select()
-          .from(tasks)
-          .where(
-            and(inArray(tasks.listId, allowedListIds), eq(tasks.status, status === "done" ? "done" : "open"))
-          )
-          .orderBy(asc(tasks.dueDate), asc(tasks.createdAt), asc(tasks.id))
-          .limit(safeLimit)
-          .offset(safeOffset);
+  const filters: SQL[] = [inArray(tasks.listId, allowedListIds)];
+  if (status !== "all") {
+    filters.push(eq(tasks.status, status));
+  }
+  if (dueBefore) {
+    filters.push(lte(tasks.dueDate, dueBefore));
+  }
+  if (dueAfter) {
+    filters.push(gte(tasks.dueDate, dueAfter));
+  }
+  if (listId) {
+    filters.push(eq(tasks.listId, listId));
+  }
+  if (search) {
+    const pattern = `%${escapeLike(search.toLowerCase())}%`;
+    filters.push(
+      sql`(lower(${tasks.title}) LIKE ${pattern} ESCAPE '\\' OR lower(coalesce(${tasks.note}, '')) LIKE ${pattern} ESCAPE '\\')`
+    );
+  }
 
-  return json({ tasks: rows.map(mapTask) });
+  const orderBy =
+    sort === "default"
+      ? status === "all"
+        ? [asc(tasks.status), asc(tasks.dueDate), asc(tasks.createdAt), asc(tasks.id)]
+        : [asc(tasks.dueDate), asc(tasks.createdAt), asc(tasks.id)]
+      : sort === "due_date_asc"
+        ? [asc(tasks.dueDate), asc(tasks.createdAt), asc(tasks.id)]
+        : sort === "due_date_desc"
+          ? [desc(tasks.dueDate), desc(tasks.createdAt), desc(tasks.id)]
+          : sort === "created_at_asc"
+            ? [asc(tasks.createdAt), asc(tasks.id)]
+            : [desc(tasks.createdAt), desc(tasks.id)];
+
+  const rows = await db
+    .select()
+    .from(tasks)
+    .where(and(...filters))
+    .orderBy(...orderBy)
+    .limit(safeLimit)
+    .offset(safeOffset);
+
+  return json({ tasks: rows.map(mapTask) } satisfies ListTasksResponse);
 };
 
 const updateTask = async (
@@ -713,6 +766,13 @@ const updateTask = async (
       return error("dueDate must be YYYY-MM-DD or null", 422);
     }
     updates.dueDate = payload.dueDate;
+  }
+  if (payload.listId !== undefined) {
+    const listId = payload.listId.trim();
+    if (!listId) {
+      return error("listId cannot be empty", 422);
+    }
+    updates.listId = listId;
   }
   if (Object.keys(updates).length === 1) {
     return error("no updates provided", 422);
@@ -1004,7 +1064,7 @@ const updateRecurrenceRule = async (
 const materializeRecurrences = async (
   env: Env,
   onDate?: string,
-  actorUserId?: string
+  actorUserId?: string,
   requestContext?: RequestContext
 ): Promise<{ created: number; rulesProcessed: number }> => {
   const db = dbForEnv(env);
@@ -1336,7 +1396,7 @@ const handleFetch = async (request: Request, env: Env, requestContext: RequestCo
     return withRequestIdHeader(await createRecurrenceRule(request, env, auth, requestContext), requestContext.requestId);
   }
   if (pathname === "/recurrence-rules" && request.method === "GET") {
-    return withRequestIdHeader(await listRecurrenceRules(env, auth), requestContext.requestId);
+    return withRequestIdHeader(await listRecurrenceRules(request, env, auth), requestContext.requestId);
   }
 
   if (pathname === "/lists" && request.method === "POST") {

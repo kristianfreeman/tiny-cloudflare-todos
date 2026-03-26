@@ -57,6 +57,31 @@ const queryAuditEvents = async (
   return result.results;
 };
 
+const createTask = async (
+  context: WorkerTestContext,
+  payload: { title: string; note?: string; dueDate?: string; listId?: string }
+): Promise<{ id: string; title: string; note: string | null; dueDate: string | null; listId: string }> => {
+  const response = await apiRequest(context, "/tasks", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+  expect(response.status).toBe(201);
+  const body = await readJson<{
+    task: { id: string; title: string; note: string | null; dueDate: string | null; listId: string };
+  }>(response);
+  return body.task;
+};
+
+const createList = async (context: WorkerTestContext, name: string): Promise<string> => {
+  const response = await apiRequest(context, "/lists", {
+    method: "POST",
+    body: JSON.stringify({ name })
+  });
+  expect(response.status).toBe(201);
+  const body = await readJson<{ list: { id: string } }>(response);
+  return body.list.id;
+};
+
 describe("worker integration", () => {
   it("enforces bearer auth for protected endpoints", async () => {
     const context = await newContext();
@@ -101,11 +126,14 @@ describe("worker integration", () => {
       body: JSON.stringify({ title: "Write integration tests", note: "baseline", dueDate: "2026-04-01" })
     }, "valid", undefined, requestId);
     expect(createResponse.status).toBe(201);
-    const created = await readJson<{ task: { id: string; title: string; note: string | null; status: string; dueDate: string | null } }>(
+    const created = await readJson<{
+      task: { id: string; title: string; note: string | null; status: string; dueDate: string | null; listId: string };
+    }>(
       createResponse
     );
     expect(created.task.title).toBe("Write integration tests");
     expect(created.task.status).toBe("open");
+    expect(created.task.listId).toBe("default:test-user");
 
     const listOpenResponse = await apiRequest(context, "/tasks?status=open&limit=50", { method: "GET" });
     expect(listOpenResponse.status).toBe(200);
@@ -353,5 +381,125 @@ describe("worker integration", () => {
       "viewer-token"
     );
     expect(viewerCannotUpdateRule.status).toBe(403);
+  });
+
+  it("filters tasks by search text", async () => {
+    const context = await newContext();
+
+    await createTask(context, { title: "Plan sprint", note: "alpha launch", dueDate: "2026-04-01" });
+    await createTask(context, { title: "Write docs", note: "Beta users", dueDate: "2026-04-02" });
+
+    const response = await apiRequest(context, "/tasks?status=all&search=ALPHA", { method: "GET" });
+    expect(response.status).toBe(200);
+    const body = await readJson<{ tasks: Array<{ title: string }> }>(response);
+    expect(body.tasks.map((task) => task.title)).toEqual(["Plan sprint"]);
+  });
+
+  it("filters tasks by due-before and due-after", async () => {
+    const context = await newContext();
+
+    await createTask(context, { title: "Task A", dueDate: "2026-04-01" });
+    await createTask(context, { title: "Task B", dueDate: "2026-04-05" });
+    await createTask(context, { title: "Task C", dueDate: "2026-04-10" });
+
+    const dueBeforeResponse = await apiRequest(context, "/tasks?status=all&due-before=2026-04-05", { method: "GET" });
+    expect(dueBeforeResponse.status).toBe(200);
+    const dueBeforeBody = await readJson<{ tasks: Array<{ title: string }> }>(dueBeforeResponse);
+    expect(dueBeforeBody.tasks.map((task) => task.title)).toEqual(["Task A", "Task B"]);
+
+    const dueAfterResponse = await apiRequest(context, "/tasks?status=all&due-after=2026-04-05", { method: "GET" });
+    expect(dueAfterResponse.status).toBe(200);
+    const dueAfterBody = await readJson<{ tasks: Array<{ title: string }> }>(dueAfterResponse);
+    expect(dueAfterBody.tasks.map((task) => task.title)).toEqual(["Task B", "Task C"]);
+  });
+
+  it("filters tasks by list_id", async () => {
+    const context = await newContext();
+
+    const inboxListId = await createList(context, "Inbox List");
+    const workListId = await createList(context, "Work List");
+
+    await createTask(context, { title: "Inbox item", listId: inboxListId, dueDate: "2026-04-01" });
+    await createTask(context, { title: "Work item", listId: workListId, dueDate: "2026-04-02" });
+
+    const response = await apiRequest(context, `/tasks?status=all&list_id=${encodeURIComponent(workListId)}`, {
+      method: "GET"
+    });
+    expect(response.status).toBe(200);
+    const body = await readJson<{ tasks: Array<{ title: string; listId: string }> }>(response);
+    expect(body.tasks).toHaveLength(1);
+    expect(body.tasks[0]?.title).toBe("Work item");
+    expect(body.tasks[0]?.listId).toBe(workListId);
+  });
+
+  it("supports stable task sort options", async () => {
+    const context = await newContext();
+
+    await createTask(context, { title: "First", dueDate: "2026-04-01" });
+    await createTask(context, { title: "Second", dueDate: "2026-04-03" });
+    await createTask(context, { title: "Third", dueDate: "2026-04-02" });
+
+    const dueDescResponse = await apiRequest(context, "/tasks?status=all&sort=due_date_desc", { method: "GET" });
+    expect(dueDescResponse.status).toBe(200);
+    const dueDescBody = await readJson<{ tasks: Array<{ title: string }> }>(dueDescResponse);
+    expect(dueDescBody.tasks.map((task) => task.title)).toEqual(["Second", "Third", "First"]);
+
+    const createdAscResponse = await apiRequest(context, "/tasks?status=all&sort=created_at_asc", { method: "GET" });
+    expect(createdAscResponse.status).toBe(200);
+    const createdAscBody = await readJson<{ tasks: Array<{ title: string }> }>(createdAscResponse);
+    expect(createdAscBody.tasks.map((task) => task.title)).toEqual(["First", "Second", "Third"]);
+  });
+
+  it("combines status, search, list_id, date window, sort, limit, and offset", async () => {
+    const context = await newContext();
+    const workListId = await createList(context, "Work");
+    const personalListId = await createList(context, "Personal");
+
+    const alphaA = await createTask(context, {
+      title: "Alpha A",
+      note: "priority",
+      dueDate: "2026-04-01",
+      listId: workListId
+    });
+    await createTask(context, {
+      title: "Alpha B",
+      note: "priority",
+      dueDate: "2026-04-02",
+      listId: workListId
+    });
+    const alphaC = await createTask(context, {
+      title: "Alpha C",
+      note: "priority",
+      dueDate: "2026-04-03",
+      listId: workListId
+    });
+    await createTask(context, {
+      title: "Beta D",
+      note: "priority",
+      dueDate: "2026-04-02",
+      listId: workListId
+    });
+    await createTask(context, {
+      title: "Alpha E",
+      note: "priority",
+      dueDate: "2026-04-02",
+      listId: personalListId
+    });
+
+    await apiRequest(context, `/tasks/${encodeURIComponent(alphaA.id)}/complete`, { method: "POST" });
+    await apiRequest(context, `/tasks/${encodeURIComponent(alphaC.id)}/complete`, { method: "POST" });
+
+    const response = await apiRequest(
+      context,
+      `/tasks?status=done&search=alpha&list_id=${encodeURIComponent(workListId)}&due-after=2026-04-02&due-before=2026-04-03&sort=due_date_desc&limit=10&offset=0`,
+      { method: "GET" }
+    );
+    expect(response.status).toBe(200);
+    const body = await readJson<{ tasks: Array<{ id: string; title: string; status: string; listId: string }> }>(response);
+    expect(body.tasks).toHaveLength(1);
+    expect(body.tasks[0]?.id).toBe(alphaC.id);
+    expect(body.tasks[0]?.title).toBe("Alpha C");
+    expect(body.tasks[0]?.status).toBe("done");
+    expect(body.tasks[0]?.listId).toBe(workListId);
   });
 });
