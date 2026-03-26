@@ -31,12 +31,13 @@ const dueLabel = (task: TodoTask): string => {
 };
 
 const subtitle = (task: TodoTask): string => {
+  const taskTags = Array.isArray(task.tags) ? task.tags : [];
   if (task.note && task.note.trim().length > 0) {
     return task.note;
   }
 
-  if (task.tags.length > 0) {
-    return task.tags.join(", ");
+  if (taskTags.length > 0) {
+    return taskTags.join(", ");
   }
 
   return dueLabel(task);
@@ -47,7 +48,8 @@ const matchesSearch = (task: TodoTask, query: string): boolean => {
     return true;
   }
 
-  const text = `${task.title}\n${task.note ?? ""}\n${task.tags.join(" ")}`.toLowerCase();
+  const tags = Array.isArray(task.tags) ? task.tags : [];
+  const text = `${task.title}\n${task.note ?? ""}\n${tags.join(" ")}`.toLowerCase();
   return text.includes(query.toLowerCase());
 };
 
@@ -116,6 +118,7 @@ export default function ManageTasksCommand() {
   const availableTags = useMemo(
     () =>
       [...new Set(tasks.flatMap((task) => task.tags))]
+        .filter((tag): tag is string => typeof tag === "string")
         .filter((tag) => !tag.startsWith("owner:"))
         .sort((left, right) => left.localeCompare(right)),
     [tasks]
@@ -130,7 +133,13 @@ export default function ManageTasksCommand() {
   const filtered = useMemo(
     () =>
       tasks
-        .filter((task) => (tagFilter === "__all__" ? true : task.tags.includes(tagFilter)))
+        .filter((task) => {
+          if (tagFilter === "__all__") {
+            return true;
+          }
+          const tags = Array.isArray(task.tags) ? task.tags : [];
+          return tags.includes(tagFilter);
+        })
         .filter((task) => matchesSearch(task, searchText))
         .sort(compareTasks),
     [tasks, tagFilter, searchText]
@@ -164,8 +173,9 @@ export default function ManageTasksCommand() {
 
   const accessoryForTask = (task: TodoTask): List.Item.Accessory[] => {
     const accessories: List.Item.Accessory[] = [{ text: dueLabel(task) }];
-    if (task.tags.length > 0) {
-      accessories.unshift({ tag: task.tags.join(" · ") });
+    const tags = Array.isArray(task.tags) ? task.tags : [];
+    if (tags.length > 0) {
+      accessories.unshift({ tag: tags.join(" · ") });
     }
     return accessories;
   };

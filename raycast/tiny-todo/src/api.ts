@@ -38,6 +38,22 @@ interface ErrorResponse {
   error?: string;
 }
 
+const normalizeTaskTags = (value: unknown): string[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((tag): tag is string => typeof tag === "string")
+    .map((tag) => tag.trim())
+    .filter((tag) => tag.length > 0);
+};
+
+const normalizeTask = (task: TodoTask): TodoTask => ({
+  ...task,
+  tags: normalizeTaskTags(task.tags)
+});
+
 const normalizeApiBaseUrl = (value: string): string => value.replace(/\/+$/, "");
 
 const getApiConfig = (): { apiBaseUrl: string; apiToken: string } => {
@@ -105,7 +121,7 @@ export const listTasks = async (status: TaskStatus, tags?: string[]): Promise<To
     query.set("tag", tags.join(","));
   }
   const response = await request<TaskListResponse>(`/tasks?${query.toString()}`);
-  return response.tasks;
+  return response.tasks.map(normalizeTask);
 };
 
 export const createTask = async (input: CreateTaskInput): Promise<TodoTask> => {
@@ -113,7 +129,7 @@ export const createTask = async (input: CreateTaskInput): Promise<TodoTask> => {
     method: "POST",
     body: JSON.stringify(input)
   });
-  return response.task;
+  return normalizeTask(response.task);
 };
 
 export const completeTask = async (taskId: string): Promise<TodoTask> => {
@@ -121,5 +137,5 @@ export const completeTask = async (taskId: string): Promise<TodoTask> => {
   const response = await request<{ task: TodoTask }>(`/tasks/${encodedId}/complete`, {
     method: "POST"
   });
-  return response.task;
+  return normalizeTask(response.task);
 };
