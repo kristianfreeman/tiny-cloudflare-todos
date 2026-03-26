@@ -24,6 +24,12 @@ This repository includes a GitHub Actions workflow at `.github/workflows/raycast
 - Every push uploads an installable GitHub artifact zip: `tiny-todo-raycast-extension-<sha>.zip`.
 - Pushes to `main` also publish when `RAYCAST_ACCESS_TOKEN` is configured in repository secrets.
 
+### Private Organization Publishing
+
+- This extension is configured for private team publishing with `owner: "freeman-labs"` in `raycast/tiny-todo/package.json`.
+- `npm run publish` now runs `ray publish`, which publishes to the organization store when auth is valid.
+- Team members can install from the private extension link after publish.
+
 ## Install from GitHub
 
 1. Open the latest workflow run for `Raycast Extension` in GitHub Actions.

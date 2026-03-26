@@ -1,6 +1,7 @@
 {
   "$schema": "https://www.raycast.com/schemas/extension.json",
   "name": "tiny-todo",
+  "owner": "freeman-labs",
   "title": "Tiny Todo",
   "description": "Create, browse, and complete tasks from a Tiny Todo API",
   "icon": "icon.png",
@@ -120,6 +121,6 @@
     "dev": "ray develop",
     "lint": "ray lint",
     "fix-lint": "ray lint --fix",
-    "publish": "npx @raycast/api@latest publish"
+    "publish": "ray publish"
   }
 }
