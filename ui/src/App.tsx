@@ -1,15 +1,33 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from "react";
-import { Badge, Button, ClipboardText, Input, SensitiveInput, Tabs, Text } from "@cloudflare/kumo";
+import {
+  CaretDown,
+  CaretRight,
+  CheckCircle,
+  Circle,
+  Robot,
+  SignOut,
+  Tag,
+  Trash,
+  User,
+  UserCircle
+} from "@phosphor-icons/react";
+import { Badge, Button, ClipboardText, Input, SensitiveInput, Tabs } from "@cloudflare/kumo";
 
 interface Task {
   id: string;
   title: string;
   note: string | null;
+  tags: string[];
   dueDate: string | null;
   status: "open" | "done";
 }
 
 interface TasksResponse {
+  tasks: Task[];
+}
+
+interface TaskGroup {
+  tag: string;
   tasks: Task[];
 }
 
@@ -25,6 +43,43 @@ const readError = async (response: Response): Promise<string> => {
   }
 };
 
+const groupTasksByTag = (tasks: Task[]): TaskGroup[] => {
+  const grouped = new Map<string, Task[]>();
+  for (const task of tasks) {
+    const tags = task.tags.filter((tag) => !tag.startsWith("owner:"));
+    const groupingTags = tags.length > 0 ? tags : ["untagged"];
+    for (const tag of groupingTags) {
+      const key = tag.trim() || "untagged";
+      const existing = grouped.get(key);
+      if (existing) {
+        existing.push(task);
+      } else {
+        grouped.set(key, [task]);
+      }
+    }
+  }
+
+  const tagRank = (tag: string): number => {
+    if (tag.startsWith("project:")) {
+      return 0;
+    }
+    if (tag === "untagged") {
+      return 2;
+    }
+    return 1;
+  };
+
+  return [...grouped.entries()]
+    .sort((left, right) => {
+      const rankDiff = tagRank(left[0]) - tagRank(right[0]);
+      if (rankDiff !== 0) {
+        return rankDiff;
+      }
+      return left[0].localeCompare(right[0]);
+    })
+    .map(([tag, groupedTasks]) => ({ tag, tasks: groupedTasks }));
+};
+
 export function App() {
   const [sessionChecked, setSessionChecked] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
@@ -33,14 +88,18 @@ export function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [taskTitle, setTaskTitle] = useState("");
   const [taskNote, setTaskNote] = useState("");
+  const [taskTags, setTaskTags] = useState("");
   const [taskDueDate, setTaskDueDate] = useState("");
   const [taskError, setTaskError] = useState<string | null>(null);
   const [activePage, setActivePage] = useState<Page>("tasks");
   const [token, setToken] = useState<string | null>(null);
   const [loadingTasks, setLoadingTasks] = useState(false);
+  const [showClosed, setShowClosed] = useState(false);
 
   const openTasks = useMemo(() => tasks.filter((task) => task.status === "open"), [tasks]);
   const doneTasks = useMemo(() => tasks.filter((task) => task.status === "done"), [tasks]);
+  const openGroups = useMemo(() => groupTasksByTag(openTasks), [openTasks]);
+  const doneGroups = useMemo(() => groupTasksByTag(doneTasks), [doneTasks]);
 
   const loadSession = async (): Promise<void> => {
     const response = await fetch("/ui/session", { method: "GET" });
@@ -58,8 +117,7 @@ export function App() {
     setLoadingTasks(true);
     const response = await fetch("/ui/api/tasks?status=all", { method: "GET" });
     if (!response.ok) {
-      const message = await readError(response);
-      setTaskError(message.includes("invalid bearer token") ? "UI bearer token is invalid for local DB." : message);
+      setTaskError(await readError(response));
       setLoadingTasks(false);
       return;
     }
@@ -117,13 +175,20 @@ export function App() {
       setTaskError("Title is required.");
       return;
     }
+
+    const parsedTags = taskTags
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+
     const response = await fetch("/ui/api/tasks", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         title: taskTitle.trim(),
         note: taskNote.trim() || undefined,
-        dueDate: taskDueDate || undefined
+        dueDate: taskDueDate || undefined,
+        tags: parsedTags.length > 0 ? parsedTags : undefined
       })
     });
     if (!response.ok) {
@@ -132,6 +197,7 @@ export function App() {
     }
     setTaskTitle("");
     setTaskNote("");
+    setTaskTags("");
     setTaskDueDate("");
     await loadTasks();
   };
@@ -171,6 +237,46 @@ export function App() {
     await loadTasks();
   };
 
+  const ownerOfTask = (task: Task): "agent" | "user" | null => {
+    if (task.tags.includes("owner:agent")) {
+      return "agent";
+    }
+    if (task.tags.includes("owner:user")) {
+      return "user";
+    }
+    return null;
+  };
+
+  const renderTaskRow = (task: Task) => {
+    const owner = ownerOfTask(task);
+    const ownerTitle = owner === "agent" ? "Agent-owned" : owner === "user" ? "User-owned" : "Unknown owner";
+    return (
+      <li className="task-item" key={task.id}>
+        <span className="owner-icon" title={ownerTitle}>
+          {owner === "agent" ? <Robot size={16} weight="fill" /> : <User size={16} weight="fill" />}
+        </span>
+        <Input
+          defaultValue={task.title}
+          disabled={task.status === "done"}
+          onBlur={(event: ChangeEvent<HTMLInputElement>) => void updateTaskTitle(task, event.currentTarget.value)}
+        />
+        <span className="task-meta">{task.dueDate ?? "No due date"}</span>
+        <div className="task-item-actions">
+          {task.status === "open" ? (
+            <Button onClick={() => void completeTask(task.id)}>
+              <CheckCircle size={16} weight="bold" />
+              Complete
+            </Button>
+          ) : null}
+          <Button onClick={() => void deleteTask(task.id)}>
+            <Trash size={16} weight="bold" />
+            Delete
+          </Button>
+        </div>
+      </li>
+    );
+  };
+
   if (!sessionChecked) {
     return <main className="app-shell">Checking session...</main>;
   }
@@ -180,7 +286,6 @@ export function App() {
       <main className="app-shell app-auth-shell">
         <section className="card auth-card">
           <h1 className="title">Tiny Todo Web</h1>
-          <Text as="p">Sign in with the separate UI password.</Text>
           <div className="auth-form">
             <Input
               type="password"
@@ -200,10 +305,15 @@ export function App() {
     <main className="app-shell">
       <section className="card">
         <h1 className="title">Tiny Todo Dashboard</h1>
-        <Text as="p">Kumo controls + lightweight layout.</Text>
         <div className="badge-row">
-          <Badge>{openTasks.length} open</Badge>
-          <Badge>{doneTasks.length} done</Badge>
+          <Badge>
+            <Circle size={14} weight="fill" />
+            {openTasks.length} open
+          </Badge>
+          <Badge>
+            <CheckCircle size={14} weight="fill" />
+            {doneTasks.length} closed
+          </Badge>
         </div>
         <div className="top-controls">
           <Tabs
@@ -214,62 +324,91 @@ export function App() {
             value={activePage}
             onValueChange={(value) => setActivePage(value as Page)}
           />
-          <Button onClick={() => void logout()}>Logout</Button>
+          <Button onClick={() => void logout()}>
+            <SignOut size={16} weight="bold" />
+            Logout
+          </Button>
         </div>
       </section>
 
       {activePage === "tasks" ? (
-        <>
-          <section className="card">
-            <h2>Create task</h2>
-            <div className="task-create-grid">
-              <Input
-                placeholder="Task title"
-                value={taskTitle}
-                onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskTitle(event.currentTarget.value)}
-              />
-              <Input
-                placeholder="Task note"
-                value={taskNote}
-                onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskNote(event.currentTarget.value)}
-              />
-              <Input
-                type="date"
-                value={taskDueDate}
-                onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskDueDate(event.currentTarget.value)}
-              />
-              <Button onClick={() => void createTask()}>Add task</Button>
-            </div>
-          </section>
+        <section className="card tasks-panel">
+          <h2>Create task</h2>
+          <div className="task-create-grid">
+            <Input
+              placeholder="Task title"
+              value={taskTitle}
+              onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskTitle(event.currentTarget.value)}
+            />
+            <Input
+              placeholder="Task note"
+              value={taskNote}
+              onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskNote(event.currentTarget.value)}
+            />
+            <Input
+              placeholder="tags (comma separated)"
+              value={taskTags}
+              onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskTags(event.currentTarget.value)}
+            />
+            <Input
+              type="date"
+              value={taskDueDate}
+              onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskDueDate(event.currentTarget.value)}
+            />
+            <Button onClick={() => void createTask()}>Add task</Button>
+          </div>
 
-          <section className="card">
-            <h2>Tasks</h2>
-            {taskError ? <p className="error-text">{taskError}</p> : null}
-            {loadingTasks ? <Text as="p">Loading tasks...</Text> : null}
-            <ul className="task-list">
-              {tasks.map((task) => (
-                <li className="task-item" key={task.id}>
-                  <Input
-                    defaultValue={task.title}
-                    disabled={task.status === "done"}
-                    onBlur={(event: ChangeEvent<HTMLInputElement>) => void updateTaskTitle(task, event.currentTarget.value)}
-                  />
-                  <Badge>{task.status}</Badge>
-                  <Text as="span">{task.dueDate ?? "No due date"}</Text>
-                  <div className="task-item-actions">
-                    <Button onClick={() => void completeTask(task.id)} disabled={task.status === "done"}>
-                      Complete
-                    </Button>
-                    <Button onClick={() => void deleteTask(task.id)}>Delete</Button>
-                  </div>
-                </li>
+          <div className="section-head">
+            <h2>Open</h2>
+            {loadingTasks ? <span className="task-meta">Loading...</span> : null}
+          </div>
+          {taskError ? <p className="error-text">{taskError}</p> : null}
+          <div className="tag-grid">
+            {openGroups.map((group) => (
+              <section className="tag-group" key={`open-${group.tag}`}>
+                <header className="tag-head">
+                  <span className="tag-label">
+                    <Tag size={14} weight="bold" />
+                    {group.tag}
+                  </span>
+                  <Badge>{group.tasks.length}</Badge>
+                </header>
+                <ul className="task-list">{group.tasks.map((task) => renderTaskRow(task))}</ul>
+              </section>
+            ))}
+            {openGroups.length === 0 ? <p className="task-meta">No open tasks.</p> : null}
+          </div>
+
+          <div className="section-head">
+            <h2>Closed</h2>
+            <Button onClick={() => setShowClosed((value) => !value)}>
+              {showClosed ? <CaretDown size={16} weight="bold" /> : <CaretRight size={16} weight="bold" />}
+              {showClosed ? "Hide" : "Show"} closed ({doneTasks.length})
+            </Button>
+          </div>
+          {showClosed ? (
+            <div className="tag-grid">
+              {doneGroups.map((group) => (
+                <section className="tag-group tag-group-closed" key={`done-${group.tag}`}>
+                  <header className="tag-head">
+                    <span className="tag-label">
+                      <Tag size={14} weight="bold" />
+                      {group.tag}
+                    </span>
+                    <Badge>{group.tasks.length}</Badge>
+                  </header>
+                  <ul className="task-list">{group.tasks.map((task) => renderTaskRow(task))}</ul>
+                </section>
               ))}
-            </ul>
-          </section>
-        </>
+              {doneGroups.length === 0 ? <p className="task-meta">No closed tasks.</p> : null}
+            </div>
+          ) : null}
+        </section>
       ) : (
         <section className="card">
-          <h2>User token</h2>
+          <h2>
+            <UserCircle size={18} weight="fill" /> User token
+          </h2>
           <SensitiveInput label="Bearer token" value={token ?? ""} readOnly />
           {token ? <ClipboardText text={token} tooltip={{ text: "Copy token", copiedText: "Token copied" }} /> : null}
         </section>
