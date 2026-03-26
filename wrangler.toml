@@ -1,0 +1,12 @@
+name = "tiny-todo-api"
+main = "src/worker/index.ts"
+compatibility_date = "2026-03-25"
+
+[triggers]
+crons = ["0 0 * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "todos"
+database_id = "local-dev"
+migrations_dir = "drizzle/migrations"

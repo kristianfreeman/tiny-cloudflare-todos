@@ -1,0 +1,34 @@
+{
+  "name": "tiny-cloudflare-todos",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "wrangler d1 migrations apply todos --local",
+    "db:migrate:sanity": "wrangler d1 migrations apply todos --local --persist-to .wrangler/state/ci",
+    "db:migrate:remote": "wrangler d1 migrations apply todos --remote",
+    "cli": "tsx src/cli/index.ts"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.44.5"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260317.1",
+    "@miniflare/d1": "^2.14.4",
+    "@miniflare/shared": "^2.14.4",
+    "@types/node": "^24.5.2",
+    "better-sqlite3": "^12.8.0",
+    "drizzle-kit": "^0.31.5",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.1",
+    "wrangler": "^4.7.0"
+  }
+}
