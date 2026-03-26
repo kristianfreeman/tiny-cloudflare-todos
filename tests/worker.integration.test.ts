@@ -24,11 +24,12 @@ const apiRequest = async (
   pathName: string,
   init: RequestInit = {},
   auth: "valid" | "invalid" | "none" = "valid",
+  tokenOverride?: string,
   requestId?: string
 ): Promise<Response> => {
   const headers = new Headers(init.headers);
   if (auth === "valid") {
-    headers.set("authorization", `Bearer ${context.apiToken}`);
+    headers.set("authorization", `Bearer ${tokenOverride ?? context.apiToken}`);
   }
   if (auth === "invalid") {
     headers.set("authorization", "Bearer not-the-right-token");
@@ -78,7 +79,7 @@ describe("worker integration", () => {
       expect(responseWithoutHeader.headers.get("x-request-id")).toMatch(/[a-f0-9-]{36}/);
 
       const customRequestId = "req-ctx-0001";
-      const responseWithHeader = await apiRequest(context, "/tasks", { method: "GET" }, "none", customRequestId);
+      const responseWithHeader = await apiRequest(context, "/tasks", { method: "GET" }, "none", undefined, customRequestId);
       expect(responseWithHeader.status).toBe(401);
       expect(responseWithHeader.headers.get("x-request-id")).toBe(customRequestId);
 
@@ -98,7 +99,7 @@ describe("worker integration", () => {
     const createResponse = await apiRequest(context, "/tasks", {
       method: "POST",
       body: JSON.stringify({ title: "Write integration tests", note: "baseline", dueDate: "2026-04-01" })
-    }, "valid", requestId);
+    }, "valid", undefined, requestId);
     expect(createResponse.status).toBe(201);
     const created = await readJson<{ task: { id: string; title: string; note: string | null; status: string; dueDate: string | null } }>(
       createResponse
@@ -115,13 +116,20 @@ describe("worker integration", () => {
     const patchResponse = await apiRequest(context, `/tasks/${created.task.id}`, {
       method: "PATCH",
       body: JSON.stringify({ note: "updated note", dueDate: "2026-04-03" })
-    }, "valid", requestId);
+    }, "valid", undefined, requestId);
     expect(patchResponse.status).toBe(200);
     const patched = await readJson<{ task: { note: string | null; dueDate: string | null } }>(patchResponse);
     expect(patched.task.note).toBe("updated note");
     expect(patched.task.dueDate).toBe("2026-04-03");
 
-    const completeResponse = await apiRequest(context, `/tasks/${created.task.id}/complete`, { method: "POST" }, "valid", requestId);
+    const completeResponse = await apiRequest(
+      context,
+      `/tasks/${created.task.id}/complete`,
+      { method: "POST" },
+      "valid",
+      undefined,
+      requestId
+    );
     expect(completeResponse.status).toBe(200);
     const completed = await readJson<{ task: { status: string; completedAt: string | null } }>(completeResponse);
     expect(completed.task.status).toBe("done");
@@ -155,7 +163,7 @@ describe("worker integration", () => {
         interval: 1,
         anchorDate: "2026-01-01"
       })
-    }, "valid", requestId);
+    }, "valid", undefined, requestId);
     expect(createRuleResponse.status).toBe(201);
     const createRuleBody = await readJson<{ recurrenceRule: { id: string; nextRunDate: string } }>(createRuleResponse);
     expect(createRuleBody.recurrenceRule.nextRunDate).toBe("2026-01-01");
@@ -194,7 +202,7 @@ describe("worker integration", () => {
     const updateRuleResponse = await apiRequest(context, `/recurrence-rules/${createRuleBody.recurrenceRule.id}`, {
       method: "PATCH",
       body: JSON.stringify({ active: false })
-    }, "valid", requestId);
+    }, "valid", undefined, requestId);
     expect(updateRuleResponse.status).toBe(200);
 
     const auditEvents = await queryAuditEvents(context);
@@ -208,5 +216,142 @@ describe("worker integration", () => {
           row.request_id === requestId
       )
     ).toBe(true);
+  });
+
+  it("supports list creation and owner-managed memberships", async () => {
+    const context = await newContext();
+    await context.createUserToken({ userId: "editor-user", token: "editor-token" });
+
+    const createListResponse = await apiRequest(context, "/lists", {
+      method: "POST",
+      body: JSON.stringify({ name: "House" })
+    });
+    expect(createListResponse.status).toBe(201);
+    const createListBody = await readJson<{ list: { id: string; name: string; myRole: string } }>(createListResponse);
+    expect(createListBody.list.name).toBe("House");
+    expect(createListBody.list.myRole).toBe("owner");
+
+    const ownerCanAddMembership = await apiRequest(context, `/lists/${createListBody.list.id}/memberships/editor-user`, {
+      method: "PUT",
+      body: JSON.stringify({ role: "editor" })
+    });
+    expect(ownerCanAddMembership.status).toBe(200);
+
+    const editorMembershipsResponse = await apiRequest(
+      context,
+      `/lists/${createListBody.list.id}/memberships`,
+      { method: "GET" },
+      "valid",
+      "editor-token"
+    );
+    expect(editorMembershipsResponse.status).toBe(200);
+    const editorMemberships = await readJson<{ memberships: Array<{ userId: string; role: string }> }>(
+      editorMembershipsResponse
+    );
+    expect(editorMemberships.memberships.map((membership) => ({ userId: membership.userId, role: membership.role }))).toEqual(
+      expect.arrayContaining([
+        { userId: "test-user", role: "owner" },
+        { userId: "editor-user", role: "editor" }
+      ])
+    );
+
+    const editorCannotWriteMembership = await apiRequest(
+      context,
+      `/lists/${createListBody.list.id}/memberships/test-user`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ role: "viewer" })
+      },
+      "valid",
+      "editor-token"
+    );
+    expect(editorCannotWriteMembership.status).toBe(403);
+    await expect(readJson<{ error: string }>(editorCannotWriteMembership)).resolves.toEqual({
+      error: "insufficient list role"
+    });
+  });
+
+  it("enforces list isolation and editor/viewer role checks", async () => {
+    const context = await newContext();
+    await context.createUserToken({ userId: "editor-user", token: "editor-token" });
+    await context.createUserToken({ userId: "viewer-user", token: "viewer-token" });
+
+    const createListResponse = await apiRequest(context, "/lists", {
+      method: "POST",
+      body: JSON.stringify({ name: "Shared" })
+    });
+    const createListBody = await readJson<{ list: { id: string } }>(createListResponse);
+
+    await apiRequest(context, `/lists/${createListBody.list.id}/memberships/editor-user`, {
+      method: "PUT",
+      body: JSON.stringify({ role: "editor" })
+    });
+    await apiRequest(context, `/lists/${createListBody.list.id}/memberships/viewer-user`, {
+      method: "PUT",
+      body: JSON.stringify({ role: "viewer" })
+    });
+
+    const editorCreatesTask = await apiRequest(
+      context,
+      "/tasks",
+      {
+        method: "POST",
+        body: JSON.stringify({ title: "shared task", listId: createListBody.list.id })
+      },
+      "valid",
+      "editor-token"
+    );
+    expect(editorCreatesTask.status).toBe(201);
+    const editorTaskBody = await readJson<{ task: { id: string } }>(editorCreatesTask);
+
+    const viewerListsTasks = await apiRequest(
+      context,
+      `/tasks?status=all&listId=${createListBody.list.id}`,
+      { method: "GET" },
+      "valid",
+      "viewer-token"
+    );
+    expect(viewerListsTasks.status).toBe(200);
+    const viewerTasksBody = await readJson<{ tasks: Array<{ id: string }> }>(viewerListsTasks);
+    expect(viewerTasksBody.tasks).toHaveLength(1);
+    expect(viewerTasksBody.tasks[0]?.id).toBe(editorTaskBody.task.id);
+
+    const viewerCannotCompleteTask = await apiRequest(
+      context,
+      `/tasks/${editorTaskBody.task.id}/complete`,
+      { method: "POST" },
+      "valid",
+      "viewer-token"
+    );
+    expect(viewerCannotCompleteTask.status).toBe(403);
+
+    const editorCreatesRule = await apiRequest(
+      context,
+      "/recurrence-rules",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          titleTemplate: "shared recurring",
+          cadence: "daily",
+          listId: createListBody.list.id,
+          anchorDate: "2026-02-01"
+        })
+      },
+      "valid",
+      "editor-token"
+    );
+    expect(editorCreatesRule.status).toBe(201);
+
+    const viewerCannotUpdateRule = await apiRequest(
+      context,
+      `/recurrence-rules/${(await readJson<{ recurrenceRule: { id: string } }>(editorCreatesRule)).recurrenceRule.id}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ timezone: "UTC" })
+      },
+      "valid",
+      "viewer-token"
+    );
+    expect(viewerCannotUpdateRule.status).toBe(403);
   });
 });

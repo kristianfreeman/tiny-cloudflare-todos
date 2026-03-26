@@ -1,13 +1,27 @@
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
-import { apiTokens, auditEvents, idempotencyRecords, recurrenceRules, tasks, users } from "../../drizzle/schema";
+import {
+  apiTokens,
+  auditEvents,
+  idempotencyRecords,
+  listMemberships,
+  lists,
+  recurrenceRules,
+  tasks,
+  users
+} from "../../drizzle/schema";
 import { logError, logInfo, logWarn } from "./observability";
 import type {
+  CreateListInput,
   CreateRecurrenceRuleInput,
   CreateTaskInput,
+  ListDTO,
+  ListMembershipDTO,
+  ListRole,
   RecurrenceRuleDTO,
   TaskDTO,
   TaskStatus,
+  UpsertListMembershipInput,
   UpdateRecurrenceRuleInput,
   UpdateTaskInput
 } from "../shared/types";
@@ -43,6 +57,13 @@ const IDEMPOTENCY_HEADER = "idempotency-key";
 const REQUEST_ID_HEADER = "x-request-id";
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 const IDEMPOTENCY_MAX_KEY_LENGTH = 200;
+const DEFAULT_LIST_NAME = "Default";
+const LIST_ROLES: readonly ListRole[] = ["owner", "editor", "viewer"];
+const LIST_ROLE_RANK: Record<ListRole, number> = {
+  owner: 3,
+  editor: 2,
+  viewer: 1
+};
 
 const isIsoDate = (value: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(value);
 
@@ -161,6 +182,7 @@ const computeNextRunDate = (rule: typeof recurrenceRules.$inferSelect, fromDate:
 
 const mapTask = (row: typeof tasks.$inferSelect): TaskDTO => ({
   id: row.id,
+  listId: row.listId,
   title: row.title,
   note: row.note,
   status: row.status as TaskStatus,
@@ -173,6 +195,7 @@ const mapTask = (row: typeof tasks.$inferSelect): TaskDTO => ({
 
 const mapRule = (row: typeof recurrenceRules.$inferSelect): RecurrenceRuleDTO => ({
   id: row.id,
+  listId: row.listId,
   titleTemplate: row.titleTemplate,
   noteTemplate: row.noteTemplate,
   cadence: row.cadence as "daily" | "weekly",
@@ -187,8 +210,30 @@ const mapRule = (row: typeof recurrenceRules.$inferSelect): RecurrenceRuleDTO =>
   updatedAt: row.updatedAt
 });
 
+const mapList = (
+  listRow: typeof lists.$inferSelect,
+  membershipRow: typeof listMemberships.$inferSelect
+): ListDTO => ({
+  id: listRow.id,
+  name: listRow.name,
+  createdByUserId: listRow.createdByUserId,
+  createdAt: listRow.createdAt,
+  updatedAt: listRow.updatedAt,
+  myRole: membershipRow.role
+});
+
+const mapMembership = (row: typeof listMemberships.$inferSelect): ListMembershipDTO => ({
+  listId: row.listId,
+  userId: row.userId,
+  role: row.role,
+  createdAt: row.createdAt,
+  updatedAt: row.updatedAt
+});
+
 const dbForEnv = (env: Env) =>
-  drizzle(env.DB, { schema: { users, apiTokens, tasks, recurrenceRules, idempotencyRecords, auditEvents } });
+  drizzle(env.DB, {
+    schema: { users, apiTokens, lists, listMemberships, tasks, recurrenceRules, idempotencyRecords, auditEvents }
+  });
 
 const isSafeRequestId = (value: string): boolean => /^[a-zA-Z0-9._:-]{8,128}$/.test(value);
 
@@ -265,6 +310,96 @@ const parseJsonBody = async <T>(request: Request): Promise<T | null> => {
   } catch {
     return null;
   }
+};
+
+const isListRole = (value: unknown): value is ListRole =>
+  typeof value === "string" && LIST_ROLES.includes(value as ListRole);
+
+const hasMinimumRole = (value: ListRole, minimum: ListRole): boolean => LIST_ROLE_RANK[value] >= LIST_ROLE_RANK[minimum];
+
+const loadMembership = async (
+  env: Env,
+  userId: string,
+  listId: string
+): Promise<typeof listMemberships.$inferSelect | null> => {
+  const db = dbForEnv(env);
+  const rows = await db
+    .select()
+    .from(listMemberships)
+    .where(and(eq(listMemberships.listId, listId), eq(listMemberships.userId, userId)));
+  return rows[0] ?? null;
+};
+
+const requireListRole = async (
+  env: Env,
+  auth: AuthContext,
+  listId: string,
+  minimumRole: ListRole
+): Promise<typeof listMemberships.$inferSelect | Response> => {
+  const membership = await loadMembership(env, auth.userId, listId);
+  if (!membership) {
+    return error("list not found", 404);
+  }
+  if (!hasMinimumRole(membership.role, minimumRole)) {
+    return error("insufficient list role", 403);
+  }
+  return membership;
+};
+
+const ensureDefaultListForUser = async (env: Env, userId: string): Promise<string> => {
+  const db = dbForEnv(env);
+  const existing = await db
+    .select({ listId: listMemberships.listId })
+    .from(listMemberships)
+    .where(and(eq(listMemberships.userId, userId), eq(listMemberships.role, "owner")))
+    .orderBy(asc(listMemberships.createdAt), asc(listMemberships.listId))
+    .limit(1);
+  if (existing[0]?.listId) {
+    return existing[0].listId;
+  }
+
+  const now = new Date().toISOString();
+  const listId = `default:${userId}`;
+  await db.insert(lists).values({
+    id: listId,
+    name: DEFAULT_LIST_NAME,
+    createdByUserId: userId,
+    createdAt: now,
+    updatedAt: now
+  });
+  await db.insert(listMemberships).values({
+    listId,
+    userId,
+    role: "owner",
+    createdAt: now,
+    updatedAt: now
+  });
+  return listId;
+};
+
+const resolveWritableListId = async (
+  env: Env,
+  auth: AuthContext,
+  requestedListId?: string
+): Promise<string | Response> => {
+  if (!requestedListId) {
+    return ensureDefaultListForUser(env, auth.userId);
+  }
+
+  const roleResult = await requireListRole(env, auth, requestedListId, "editor");
+  if (roleResult instanceof Response) {
+    return roleResult;
+  }
+  return requestedListId;
+};
+
+const listIdsForMember = async (env: Env, userId: string, minimumRole: ListRole): Promise<string[]> => {
+  const db = dbForEnv(env);
+  const rows = await db
+    .select({ listId: listMemberships.listId, role: listMemberships.role })
+    .from(listMemberships)
+    .where(eq(listMemberships.userId, userId));
+  return rows.filter((row) => hasMinimumRole(row.role, minimumRole)).map((row) => row.listId);
 };
 
 const isUniqueConstraintError = (value: unknown): boolean => {
@@ -457,10 +592,15 @@ const createTask = async (
   const db = dbForEnv(env);
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
+  const listIdResult = await resolveWritableListId(env, auth, payload.listId);
+  if (listIdResult instanceof Response) {
+    return listIdResult;
+  }
 
   await db.insert(tasks).values({
     id,
     userId: auth.userId,
+    listId: listIdResult,
     title: payload.title.trim(),
     note: payload.note?.trim() || null,
     status: "open",
@@ -471,7 +611,7 @@ const createTask = async (
     completedAt: null
   });
 
-  const created = await db.select().from(tasks).where(and(eq(tasks.id, id), eq(tasks.userId, auth.userId)));
+  const created = await db.select().from(tasks).where(eq(tasks.id, id));
   if (!created[0]) {
     return error("failed to create task", 500);
   }
@@ -501,23 +641,41 @@ const listTasks = async (request: Request, env: Env, auth: AuthContext): Promise
   const status = (url.searchParams.get("status") ?? "open").toLowerCase();
   const limit = Number(url.searchParams.get("limit") ?? "100");
   const offset = Number(url.searchParams.get("offset") ?? "0");
+  const listId = url.searchParams.get("listId")?.trim() || null;
 
   const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(500, Math.floor(limit))) : 100;
   const safeOffset = Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0;
+
+  let allowedListIds: string[];
+  if (listId) {
+    const roleResult = await requireListRole(env, auth, listId, "viewer");
+    if (roleResult instanceof Response) {
+      return roleResult;
+    }
+    allowedListIds = [listId];
+  } else {
+    allowedListIds = await listIdsForMember(env, auth.userId, "viewer");
+  }
+
+  if (allowedListIds.length === 0) {
+    return json({ tasks: [] });
+  }
 
   const rows =
     status === "all"
       ? await db
           .select()
           .from(tasks)
-          .where(eq(tasks.userId, auth.userId))
+          .where(inArray(tasks.listId, allowedListIds))
           .orderBy(asc(tasks.status), asc(tasks.dueDate), asc(tasks.createdAt), asc(tasks.id))
           .limit(safeLimit)
           .offset(safeOffset)
       : await db
           .select()
           .from(tasks)
-          .where(and(eq(tasks.userId, auth.userId), eq(tasks.status, status === "done" ? "done" : "open")))
+          .where(
+            and(inArray(tasks.listId, allowedListIds), eq(tasks.status, status === "done" ? "done" : "open"))
+          )
           .orderBy(asc(tasks.dueDate), asc(tasks.createdAt), asc(tasks.id))
           .limit(safeLimit)
           .offset(safeOffset);
@@ -561,8 +719,17 @@ const updateTask = async (
   }
 
   const db = dbForEnv(env);
-  await db.update(tasks).set(updates).where(and(eq(tasks.id, taskId), eq(tasks.userId, auth.userId)));
-  const updated = await db.select().from(tasks).where(and(eq(tasks.id, taskId), eq(tasks.userId, auth.userId)));
+  const existingRows = await db.select().from(tasks).where(eq(tasks.id, taskId));
+  const existing = existingRows[0];
+  if (!existing) {
+    return error("task not found", 404);
+  }
+  const roleResult = await requireListRole(env, auth, existing.listId, "editor");
+  if (roleResult instanceof Response) {
+    return roleResult;
+  }
+  await db.update(tasks).set(updates).where(eq(tasks.id, taskId));
+  const updated = await db.select().from(tasks).where(eq(tasks.id, taskId));
   if (!updated[0]) {
     return error("task not found", 404);
   }
@@ -593,12 +760,22 @@ const completeTask = async (
   const db = dbForEnv(env);
   const now = new Date().toISOString();
 
+  const existingRows = await db.select().from(tasks).where(eq(tasks.id, taskId));
+  const existing = existingRows[0];
+  if (!existing) {
+    return error("task not found", 404);
+  }
+  const roleResult = await requireListRole(env, auth, existing.listId, "editor");
+  if (roleResult instanceof Response) {
+    return roleResult;
+  }
+
   await db
     .update(tasks)
     .set({ status: "done", completedAt: now, updatedAt: now })
-    .where(and(eq(tasks.id, taskId), eq(tasks.userId, auth.userId)));
+    .where(eq(tasks.id, taskId));
 
-  const updated = await db.select().from(tasks).where(and(eq(tasks.id, taskId), eq(tasks.userId, auth.userId)));
+  const updated = await db.select().from(tasks).where(eq(tasks.id, taskId));
   if (!updated[0]) {
     return error("task not found", 404);
   }
@@ -658,10 +835,15 @@ const createRecurrenceRule = async (
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
   const db = dbForEnv(env);
+  const listIdResult = await resolveWritableListId(env, auth, payload.listId);
+  if (listIdResult instanceof Response) {
+    return listIdResult;
+  }
 
   await db.insert(recurrenceRules).values({
     id,
     userId: auth.userId,
+    listId: listIdResult,
     titleTemplate: payload.titleTemplate.trim(),
     noteTemplate: payload.noteTemplate?.trim() || null,
     cadence: payload.cadence,
@@ -679,7 +861,7 @@ const createRecurrenceRule = async (
   const created = await db
     .select()
     .from(recurrenceRules)
-    .where(and(eq(recurrenceRules.id, id), eq(recurrenceRules.userId, auth.userId)));
+    .where(eq(recurrenceRules.id, id));
   if (!created[0]) {
     return error("failed to create recurrence rule", 500);
   }
@@ -703,12 +885,30 @@ const createRecurrenceRule = async (
   return json({ recurrenceRule: mapRule(created[0]) }, 201);
 };
 
-const listRecurrenceRules = async (env: Env, auth: AuthContext): Promise<Response> => {
+const listRecurrenceRules = async (request: Request, env: Env, auth: AuthContext): Promise<Response> => {
   const db = dbForEnv(env);
+  const url = new URL(request.url);
+  const listId = url.searchParams.get("listId")?.trim() || null;
+
+  let allowedListIds: string[];
+  if (listId) {
+    const roleResult = await requireListRole(env, auth, listId, "viewer");
+    if (roleResult instanceof Response) {
+      return roleResult;
+    }
+    allowedListIds = [listId];
+  } else {
+    allowedListIds = await listIdsForMember(env, auth.userId, "viewer");
+  }
+
+  if (allowedListIds.length === 0) {
+    return json({ recurrenceRules: [] });
+  }
+
   const rows = await db
     .select()
     .from(recurrenceRules)
-    .where(and(eq(recurrenceRules.userId, auth.userId), eq(recurrenceRules.active, true)))
+    .where(and(inArray(recurrenceRules.listId, allowedListIds), eq(recurrenceRules.active, true)))
     .orderBy(asc(recurrenceRules.nextRunDate), asc(recurrenceRules.id));
 
   return json({ recurrenceRules: rows.map(mapRule) });
@@ -762,15 +962,23 @@ const updateRecurrenceRule = async (
   }
 
   const db = dbForEnv(env);
+  const existingRows = await db.select().from(recurrenceRules).where(eq(recurrenceRules.id, ruleId));
+  const existing = existingRows[0];
+  if (!existing) {
+    return error("recurrence rule not found", 404);
+  }
+
+  const roleResult = await requireListRole(env, auth, existing.listId, "editor");
+  if (roleResult instanceof Response) {
+    return roleResult;
+  }
+
   await db
     .update(recurrenceRules)
     .set(updates)
-    .where(and(eq(recurrenceRules.id, ruleId), eq(recurrenceRules.userId, auth.userId)));
+    .where(eq(recurrenceRules.id, ruleId));
 
-  const updated = await db
-    .select()
-    .from(recurrenceRules)
-    .where(and(eq(recurrenceRules.id, ruleId), eq(recurrenceRules.userId, auth.userId)));
+  const updated = await db.select().from(recurrenceRules).where(eq(recurrenceRules.id, ruleId));
   if (!updated[0]) {
     return error("recurrence rule not found", 404);
   }
@@ -796,14 +1004,20 @@ const updateRecurrenceRule = async (
 const materializeRecurrences = async (
   env: Env,
   onDate?: string,
-  userId?: string,
+  actorUserId?: string
   requestContext?: RequestContext
 ): Promise<{ created: number; rulesProcessed: number }> => {
   const db = dbForEnv(env);
   const nowDate = new Date();
   const now = nowDate.toISOString();
-  const materializationFilter = userId
-    ? and(eq(recurrenceRules.userId, userId), eq(recurrenceRules.active, true))
+
+  const writableListIds = actorUserId ? await listIdsForMember(env, actorUserId, "editor") : null;
+  if (actorUserId && writableListIds && writableListIds.length === 0) {
+    return { created: 0, rulesProcessed: 0 };
+  }
+
+  const materializationFilter = writableListIds
+    ? and(inArray(recurrenceRules.listId, writableListIds), eq(recurrenceRules.active, true))
     : eq(recurrenceRules.active, true);
 
   const activeRules = await db
@@ -830,6 +1044,7 @@ const materializeRecurrences = async (
           await db.insert(tasks).values({
             id: crypto.randomUUID(),
             userId: rule.userId,
+            listId: rule.listId,
             title: rule.titleTemplate,
             note: rule.noteTemplate,
             status: "open",
@@ -857,7 +1072,7 @@ const materializeRecurrences = async (
         nextRunDate: cursor,
         updatedAt: now
       })
-      .where(and(eq(recurrenceRules.id, rule.id), eq(recurrenceRules.userId, rule.userId)));
+      .where(eq(recurrenceRules.id, rule.id));
   }
 
   if (requestContext) {
@@ -866,7 +1081,7 @@ const materializeRecurrences = async (
       requestId: requestContext.requestId,
       method: requestContext.method,
       path: requestContext.path,
-      ...(userId ? { userId } : {}),
+      ...(actorUserId ? { userId: actorUserId } : {}),
       status: 200,
       details: {
         created,
@@ -893,6 +1108,149 @@ const runMaterialization = async (
     const result = await materializeRecurrences(env, body?.date, auth.userId, requestContext);
     return json({ ok: true, ...result });
   });
+
+const createList = async (request: Request, env: Env, auth: AuthContext): Promise<Response> => {
+  const payload = await parseJsonBody<CreateListInput>(request);
+  const name = payload?.name?.trim();
+  if (!name) {
+    return error("name is required", 422);
+  }
+
+  const db = dbForEnv(env);
+  const now = new Date().toISOString();
+  const listId = crypto.randomUUID();
+  await db.insert(lists).values({
+    id: listId,
+    name,
+    createdByUserId: auth.userId,
+    createdAt: now,
+    updatedAt: now
+  });
+  await db.insert(listMemberships).values({
+    listId,
+    userId: auth.userId,
+    role: "owner",
+    createdAt: now,
+    updatedAt: now
+  });
+
+  const [createdList] = await db.select().from(lists).where(eq(lists.id, listId));
+  const [createdMembership] = await db
+    .select()
+    .from(listMemberships)
+    .where(and(eq(listMemberships.listId, listId), eq(listMemberships.userId, auth.userId)));
+  if (!createdList || !createdMembership) {
+    return error("failed to create list", 500);
+  }
+
+  return json({ list: mapList(createdList, createdMembership) }, 201);
+};
+
+const listLists = async (env: Env, auth: AuthContext): Promise<Response> => {
+  const db = dbForEnv(env);
+  const rows = await db
+    .select({ list: lists, membership: listMemberships })
+    .from(listMemberships)
+    .innerJoin(lists, eq(lists.id, listMemberships.listId))
+    .where(eq(listMemberships.userId, auth.userId))
+    .orderBy(asc(lists.createdAt), asc(lists.id));
+  return json({ lists: rows.map((row) => mapList(row.list, row.membership)) });
+};
+
+const listListMemberships = async (env: Env, auth: AuthContext, listId: string): Promise<Response> => {
+  const roleResult = await requireListRole(env, auth, listId, "viewer");
+  if (roleResult instanceof Response) {
+    return roleResult;
+  }
+
+  const db = dbForEnv(env);
+  const rows = await db
+    .select()
+    .from(listMemberships)
+    .where(eq(listMemberships.listId, listId))
+    .orderBy(asc(listMemberships.createdAt), asc(listMemberships.userId));
+  return json({ memberships: rows.map(mapMembership) });
+};
+
+const upsertListMembership = async (
+  request: Request,
+  env: Env,
+  auth: AuthContext,
+  listId: string,
+  memberUserId: string
+): Promise<Response> => {
+  const ownerRoleResult = await requireListRole(env, auth, listId, "owner");
+  if (ownerRoleResult instanceof Response) {
+    return ownerRoleResult;
+  }
+
+  const payload = await parseJsonBody<UpsertListMembershipInput>(request);
+  if (!payload || !isListRole(payload.role)) {
+    return error("role must be owner, editor, or viewer", 422);
+  }
+
+  const db = dbForEnv(env);
+  const existingUser = await db.select({ id: users.id }).from(users).where(eq(users.id, memberUserId)).limit(1);
+  if (!existingUser[0]) {
+    return error("user not found", 404);
+  }
+
+  const now = new Date().toISOString();
+  const existingMembership = await db
+    .select()
+    .from(listMemberships)
+    .where(and(eq(listMemberships.listId, listId), eq(listMemberships.userId, memberUserId)));
+
+  if (existingMembership[0]) {
+    await db
+      .update(listMemberships)
+      .set({ role: payload.role, updatedAt: now })
+      .where(and(eq(listMemberships.listId, listId), eq(listMemberships.userId, memberUserId)));
+  } else {
+    await db.insert(listMemberships).values({
+      listId,
+      userId: memberUserId,
+      role: payload.role,
+      createdAt: now,
+      updatedAt: now
+    });
+  }
+
+  const [membership] = await db
+    .select()
+    .from(listMemberships)
+    .where(and(eq(listMemberships.listId, listId), eq(listMemberships.userId, memberUserId)));
+  if (!membership) {
+    return error("membership not found", 404);
+  }
+  return json({ membership: mapMembership(membership) });
+};
+
+const removeListMembership = async (
+  env: Env,
+  auth: AuthContext,
+  listId: string,
+  memberUserId: string
+): Promise<Response> => {
+  const ownerRoleResult = await requireListRole(env, auth, listId, "owner");
+  if (ownerRoleResult instanceof Response) {
+    return ownerRoleResult;
+  }
+
+  const db = dbForEnv(env);
+  const existingRows = await db
+    .select()
+    .from(listMemberships)
+    .where(and(eq(listMemberships.listId, listId), eq(listMemberships.userId, memberUserId)));
+  if (!existingRows[0]) {
+    return error("membership not found", 404);
+  }
+
+  await db
+    .delete(listMemberships)
+    .where(and(eq(listMemberships.listId, listId), eq(listMemberships.userId, memberUserId)));
+  return json({ ok: true });
+};
 
 const routeTaskId = (pathname: string): { taskId: string; complete: boolean } | null => {
   const completeMatch = pathname.match(/^\/tasks\/([^/]+)\/complete$/);
@@ -922,6 +1280,22 @@ const routeRecurrenceRuleId = (pathname: string): string | null => {
   }
 
   return decodeURIComponent(match[1]);
+};
+
+const routeListId = (pathname: string): string | null => {
+  const match = pathname.match(/^\/lists\/([^/]+)\/memberships$/);
+  if (!match || !match[1]) {
+    return null;
+  }
+  return decodeURIComponent(match[1]);
+};
+
+const routeListMembershipId = (pathname: string): { listId: string; userId: string } | null => {
+  const match = pathname.match(/^\/lists\/([^/]+)\/memberships\/([^/]+)$/);
+  if (!match || !match[1] || !match[2]) {
+    return null;
+  }
+  return { listId: decodeURIComponent(match[1]), userId: decodeURIComponent(match[2]) };
 };
 
 const handleFetch = async (request: Request, env: Env, requestContext: RequestContext): Promise<Response> => {
@@ -965,6 +1339,13 @@ const handleFetch = async (request: Request, env: Env, requestContext: RequestCo
     return withRequestIdHeader(await listRecurrenceRules(env, auth), requestContext.requestId);
   }
 
+  if (pathname === "/lists" && request.method === "POST") {
+    return withRequestIdHeader(await createList(request, env, auth), requestContext.requestId);
+  }
+  if (pathname === "/lists" && request.method === "GET") {
+    return withRequestIdHeader(await listLists(env, auth), requestContext.requestId);
+  }
+
   const recurrenceRuleId = routeRecurrenceRuleId(pathname);
   if (recurrenceRuleId && request.method === "PATCH") {
     return withRequestIdHeader(
@@ -975,6 +1356,25 @@ const handleFetch = async (request: Request, env: Env, requestContext: RequestCo
 
   if (pathname === "/jobs/materialize-recurrence" && request.method === "POST") {
     return withRequestIdHeader(await runMaterialization(request, env, auth, requestContext), requestContext.requestId);
+  }
+
+  const membershipsListId = routeListId(pathname);
+  if (membershipsListId && request.method === "GET") {
+    return withRequestIdHeader(await listListMemberships(env, auth, membershipsListId), requestContext.requestId);
+  }
+
+  const membershipPath = routeListMembershipId(pathname);
+  if (membershipPath && request.method === "PUT") {
+    return withRequestIdHeader(
+      await upsertListMembership(request, env, auth, membershipPath.listId, membershipPath.userId),
+      requestContext.requestId
+    );
+  }
+  if (membershipPath && request.method === "DELETE") {
+    return withRequestIdHeader(
+      await removeListMembership(env, auth, membershipPath.listId, membershipPath.userId),
+      requestContext.requestId
+    );
   }
 
   return withRequestIdHeader(error("not found", 404), requestContext.requestId);

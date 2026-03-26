@@ -12,6 +12,7 @@ export interface WorkerTestEnv {
 export interface WorkerTestContext {
   env: WorkerTestEnv;
   apiToken: string;
+  createUserToken: (input: { userId: string; token: string; email?: string; displayName?: string }) => Promise<void>;
   cleanup: () => Promise<void>;
 }
 
@@ -55,11 +56,29 @@ export const createWorkerTestContext = async (): Promise<WorkerTestContext> => {
     `INSERT OR REPLACE INTO api_tokens (id, user_id, name, token_hash, last_used_at, revoked_at, created_at) VALUES ('test-token-id', 'test-user', 'test', '${apiTokenHash}', NULL, NULL, CURRENT_TIMESTAMP);`
   );
 
+  const createUserToken = async (input: {
+    userId: string;
+    token: string;
+    email?: string;
+    displayName?: string;
+  }): Promise<void> => {
+    const userEmail = input.email ?? `${input.userId}@example.test`;
+    const displayName = input.displayName ?? input.userId;
+    const hashedToken = tokenHash(input.token);
+    await d1Database.exec(
+      `INSERT OR REPLACE INTO users (id, email, display_name, active, created_at, updated_at) VALUES ('${input.userId}', '${userEmail}', '${displayName}', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);`
+    );
+    await d1Database.exec(
+      `INSERT OR REPLACE INTO api_tokens (id, user_id, name, token_hash, last_used_at, revoked_at, created_at) VALUES ('token-${input.userId}', '${input.userId}', '${input.userId}', '${hashedToken}', NULL, NULL, CURRENT_TIMESTAMP);`
+    );
+  };
+
   return {
     env: {
       DB: d1Database as unknown as D1Database
     },
     apiToken,
+    createUserToken,
     cleanup: async () => {
       sqlite.close();
       await rm(tempDir, { recursive: true, force: true });

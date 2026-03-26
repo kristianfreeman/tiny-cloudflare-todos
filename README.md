@@ -5,8 +5,9 @@ Small REST-first todo platform on Cloudflare Workers + D1 with Drizzle ORM and a
 ## What is included
 
 - Worker API with per-token auth backed by D1 (`users` + `api_tokens`).
-- Drizzle schema and D1 migration SQL for auth, tasks, and recurrence rules.
+- Drizzle schema and D1 migration SQL for auth, lists/memberships RBAC, tasks, and recurrence rules.
 - Task endpoints: create, list, update, complete.
+- List endpoints: create/list lists and owner-managed memberships.
 - Recurrence endpoints: create/list/update rules and materialization job endpoint.
 - Idempotent POST support for task creation and recurrence materialization retries.
 - Phase 2 baseline observability: request IDs, structured JSON logs, and mutation audit events.
@@ -99,13 +100,27 @@ SHA-256 hashed and looked up in `api_tokens.token_hash`; requests run with that 
 
 - `GET /health`
 - `POST /tasks`
-- `GET /tasks?status=open|done|all&limit=100&offset=0`
+- `GET /tasks?status=open|done|all&limit=100&offset=0&listId=<optional-list-id>`
 - `PATCH /tasks/:taskId`
 - `POST /tasks/:taskId/complete`
+- `POST /lists`
+- `GET /lists`
+- `GET /lists/:listId/memberships`
+- `PUT /lists/:listId/memberships/:userId`
+- `DELETE /lists/:listId/memberships/:userId`
 - `POST /recurrence-rules`
-- `GET /recurrence-rules`
+- `GET /recurrence-rules?listId=<optional-list-id>`
 - `PATCH /recurrence-rules/:ruleId`
 - `POST /jobs/materialize-recurrence`
+
+### List RBAC (Phase 2)
+
+- `list_memberships.role` controls access: `owner`, `editor`, `viewer`.
+- **Owner** can add/update/delete list memberships.
+- **Editor** can create/update/complete tasks and create/update recurrence rules in the list.
+- **Viewer** can only read list data.
+- Existing single-tenant rows are backfilled into per-user default lists (`default:<user_id>`) in
+  `0004_lists_and_memberships.sql`.
 
 ## Idempotency keys (Phase 1)
 
@@ -171,7 +186,7 @@ curl -sS -X POST "$TODO_API_URL/jobs/materialize-recurrence" \
 - `exceptionDates` skips specific due dates (`YYYY-MM-DD`) while still advancing schedule cursor.
 - Materializer catches up missed runs deterministically, bounded to 366 schedule steps per rule per run.
 - Duplicate recurrence tasks are prevented by DB uniqueness on
-  `(user_id, recurrence_rule_id, due_date)` when recurrence keys are present.
+  `(list_id, recurrence_rule_id, due_date)` when recurrence keys are present.
 
 ### Recurrence payload fields
 
@@ -191,3 +206,5 @@ curl -sS -X POST "$TODO_API_URL/jobs/materialize-recurrence" \
 - Create at least one user and API token row in remote D1 before calling protected endpoints.
 - For existing single-tenant DBs, migration `0001_auth_ownership.sql` backfills current rows to
   user `legacy-single-tenant`; create a token for that user to preserve access.
+- Migration `0004_lists_and_memberships.sql` creates per-user default lists and membership rows,
+  then backfills `tasks.list_id` and `recurrence_rules.list_id` for legacy data.

@@ -2,10 +2,38 @@ export type TaskStatus = "open" | "done";
 
 export type Cadence = "daily" | "weekly";
 
+export type ListRole = "owner" | "editor" | "viewer";
+
+export interface CreateListInput {
+  name: string;
+}
+
+export interface ListDTO {
+  id: string;
+  name: string;
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+  myRole: ListRole;
+}
+
+export interface ListMembershipDTO {
+  listId: string;
+  userId: string;
+  role: ListRole;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UpsertListMembershipInput {
+  role: ListRole;
+}
+
 export interface CreateTaskInput {
   title: string;
   note?: string;
   dueDate?: string;
+  listId?: string;
 }
 
 export interface UpdateTaskInput {
@@ -23,6 +51,7 @@ export interface CreateRecurrenceRuleInput {
   timezone?: string;
   anchorDate?: string;
   exceptionDates?: string[];
+  listId?: string;
 }
 
 export interface UpdateRecurrenceRuleInput {
@@ -34,6 +63,7 @@ export interface UpdateRecurrenceRuleInput {
 
 export interface TaskDTO {
   id: string;
+  listId: string;
   title: string;
   note: string | null;
   status: TaskStatus;
@@ -46,6 +76,7 @@ export interface TaskDTO {
 
 export interface RecurrenceRuleDTO {
   id: string;
+  listId: string;
   titleTemplate: string;
   noteTemplate: string | null;
   cadence: Cadence;

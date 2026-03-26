@@ -21,11 +21,40 @@ export const apiTokens = sqliteTable("api_tokens", {
   createdAt: text("created_at").notNull()
 });
 
+export const lists = sqliteTable("lists", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  createdByUserId: text("created_by_user_id")
+    .notNull()
+    .references(() => users.id),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull()
+});
+
+export const listMemberships = sqliteTable(
+  "list_memberships",
+  {
+    listId: text("list_id")
+      .notNull()
+      .references(() => lists.id),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id),
+    role: text("role").$type<"owner" | "editor" | "viewer">().notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull()
+  },
+  (table) => [primaryKey({ columns: [table.listId, table.userId] })]
+);
+
 export const recurrenceRules = sqliteTable("recurrence_rules", {
   id: text("id").primaryKey(),
   userId: text("user_id")
     .notNull()
     .references(() => users.id),
+  listId: text("list_id")
+    .notNull()
+    .references(() => lists.id),
   titleTemplate: text("title_template").notNull(),
   noteTemplate: text("note_template"),
   cadence: text("cadence").notNull(),
@@ -45,6 +74,9 @@ export const tasks = sqliteTable("tasks", {
   userId: text("user_id")
     .notNull()
     .references(() => users.id),
+  listId: text("list_id")
+    .notNull()
+    .references(() => lists.id),
   title: text("title").notNull(),
   note: text("note"),
   status: text("status").notNull().default("open"),
@@ -92,3 +124,5 @@ export type IdempotencyRecordRow = typeof idempotencyRecords.$inferSelect;
 export type AuditEventRow = typeof auditEvents.$inferSelect;
 export type UserRow = typeof users.$inferSelect;
 export type ApiTokenRow = typeof apiTokens.$inferSelect;
+export type ListRow = typeof lists.$inferSelect;
+export type ListMembershipRow = typeof listMemberships.$inferSelect;
