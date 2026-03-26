@@ -2,6 +2,8 @@
 
 Small REST-first todo platform on Cloudflare Workers + D1 with Drizzle ORM and a lightweight TypeScript CLI.
 
+Deployed API: https://tiny-todo-api.signalnerve.workers.dev
+
 ## What is included
 
 - Worker API with per-token auth backed by D1 (`users` + `api_tokens`).
@@ -62,8 +64,33 @@ Small REST-first todo platform on Cloudflare Workers + D1 with Drizzle ORM and a
    npm run cli -- recur "Daily standup note" --cadence daily --interval 1 --timezone America/New_York --skip 2026-03-27,2026-03-31
    npm run cli -- recur-list --sort next_run_date:asc --json
    npm run cli -- done <task-id>
-   npm run cli -- sync-agent --out agent/snapshot.md
-   ```
+    npm run cli -- sync-agent --out agent/snapshot.md
+    ```
+
+## Global CLI binary
+
+This repo includes a wrapper binary at `bin/tiny-todo` that reads runtime secrets from SOPS via `sec`.
+
+Install globally:
+
+```bash
+mkdir -p "$HOME/.config/opencode/bin"
+ln -sf "$(pwd)/bin/tiny-todo" "$HOME/.config/opencode/bin/tiny-todo"
+```
+
+Required global secrets (SOPS):
+
+- `TODO_API_URL`
+- `TODO_API_TOKEN`
+
+Examples:
+
+```bash
+tiny-todo list --status open
+tiny-todo add "Follow up on proposal" --due 2026-03-31
+tiny-todo done <task-id>
+tiny-todo sync-agent --out agent/snapshot.md
+```
 
 ## Testing baseline
 
@@ -243,3 +270,8 @@ curl -sS -X POST "$TODO_API_URL/jobs/materialize-recurrence" \
   user `legacy-single-tenant`; create a token for that user to preserve access.
 - Migration `0004_lists_and_memberships.sql` creates per-user default lists and membership rows,
   then backfills `tasks.list_id` and `recurrence_rules.list_id` for legacy data.
+
+## GitHub publishing safety
+
+- No plaintext API tokens are committed in this repository.
+- Runtime secrets are expected in encrypted SOPS files outside this repo (global) or under ignored local secret paths.

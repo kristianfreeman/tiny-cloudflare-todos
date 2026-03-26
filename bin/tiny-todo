@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+SEC_BIN="$HOME/.config/opencode/bin/sec"
+
+if [[ ! -x "$SEC_BIN" ]]; then
+  echo "Missing sec helper at $SEC_BIN" >&2
+  exit 1
+fi
+
+TODO_API_URL="$($SEC_BIN get TODO_API_URL --scope global)"
+
+exec env TODO_API_URL="$TODO_API_URL" \
+  "$SEC_BIN" run TODO_API_TOKEN --scope global -- \
+  npm --prefix "$REPO_DIR" run cli -- "$@"

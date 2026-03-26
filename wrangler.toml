@@ -7,6 +7,6 @@ crons = ["0 0 * * *"]
 
 [[d1_databases]]
 binding = "DB"
-database_name = "todos"
-database_id = "local-dev"
+database_name = "tiny-todo-api"
+database_id = "b9cd1e9b-10be-4408-b113-f1fd2943a780"
 migrations_dir = "drizzle/migrations"
