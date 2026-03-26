@@ -62,7 +62,7 @@ jobs:
   publish:
     runs-on: macos-latest
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.RAYCAST_ACCESS_TOKEN != ''
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
       - name: Checkout
@@ -80,6 +80,7 @@ jobs:
         working-directory: raycast/tiny-todo
 
       - name: Publish extension
+        if: env.RAYCAST_ACCESS_TOKEN != ''
         run: npm run publish
         working-directory: raycast/tiny-todo
         env:
