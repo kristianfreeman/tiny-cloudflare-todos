@@ -79,3 +79,4 @@ jobs:
         working-directory: raycast/tiny-todo
         env:
           RAYCAST_ACCESS_TOKEN: ${{ secrets.RAYCAST_ACCESS_TOKEN }}
+          RAY_TOKEN: ${{ secrets.RAYCAST_ACCESS_TOKEN }}
