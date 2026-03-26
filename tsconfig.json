@@ -3,6 +3,7 @@
     "target": "ES2023",
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
@@ -12,13 +13,21 @@
     "types": [
       "@cloudflare/workers-types",
       "node"
+    ],
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
     ]
   },
   "include": [
     "src/**/*.ts",
+    "ui/**/*.ts",
+    "ui/**/*.tsx",
     "drizzle/**/*.ts",
     "drizzle.config.ts",
     "tests/**/*.ts",
-    "vitest.config.ts"
+    "vitest.config.ts",
+    "vite.config.ts"
   ]
 }

@@ -2,6 +2,13 @@ name = "tiny-todo-api"
 main = "src/worker/index.ts"
 compatibility_date = "2026-03-25"
 
+[build]
+command = "npm run ui:build"
+
+[assets]
+binding = "ASSETS"
+directory = "./dist/client"
+
 [triggers]
 crons = ["0 0 * * *"]
 

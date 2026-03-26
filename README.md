@@ -7,8 +7,10 @@ Deployed API: https://tiny-todo-api.signalnerve.workers.dev
 ## What is included
 
 - Worker API with per-token auth backed by D1 (`users` + `api_tokens`).
+- React web UI (Vite + `@cloudflare/kumo`) served from the same Worker at `/app`.
 - Drizzle schema and D1 migration SQL for auth, lists/memberships RBAC, tasks, and recurrence rules.
 - Task endpoints: create, list, update, complete (with lightweight `tags`).
+- Task endpoints also support delete for full CRUD (`DELETE /tasks/:taskId`).
 - List endpoints: create/list lists and owner-managed memberships.
 - Recurrence endpoints: create/list/update rules and materialization job endpoint.
 - Idempotent POST support for task creation and recurrence materialization retries.
@@ -65,8 +67,21 @@ Deployed API: https://tiny-todo-api.signalnerve.workers.dev
    npm run cli -- recur "Daily standup note" --cadence daily --interval 1 --timezone America/New_York --skip 2026-03-27,2026-03-31
    npm run cli -- recur-list --sort next_run_date:asc --json
    npm run cli -- done <task-id>
-    npm run cli -- sync-agent --out agent/snapshot.md
-    ```
+     npm run cli -- sync-agent --out agent/snapshot.md
+     ```
+
+6. Configure web UI secrets and run local UI.
+
+   ```bash
+   export WEB_UI_BEARER_TOKEN="change-me-for-local-dev"
+   export WEB_UI_PASSWORD_HASH="$(npm run -s cli -- token-hash "ui-password-change-me")"
+   export WEB_UI_SESSION_SECRET="replace-with-random-long-string"
+
+   npm run ui:build
+   npm run dev
+   ```
+
+   Then open `http://127.0.0.1:8787/app`.
 
 ## Global CLI binary
 
@@ -139,11 +154,20 @@ This repo now includes a Raycast extension in `raycast/tiny-todo`.
 All endpoints (except `GET /health`) require `Authorization: Bearer <token>`. The bearer token is
 SHA-256 hashed and looked up in `api_tokens.token_hash`; requests run with that token's `user_id` context.
 
+## Web UI auth
+
+- The web app is served at `GET /app`.
+- UI login uses a separate password (`WEB_UI_PASSWORD_HASH`) and does **not** reuse bearer auth.
+- UI session cookies are HMAC-signed with `WEB_UI_SESSION_SECRET`.
+- UI data calls go through `GET|POST|PATCH|DELETE /ui/api/*` proxy routes, authenticated by UI session.
+- The UI user page exposes `WEB_UI_BEARER_TOKEN` in a masked field and provides copy-to-clipboard.
+
 - `GET /health`
 - `POST /tasks`
 - `GET /tasks?status=open|done|all&limit=100&offset=0&listId=<optional-list-id>&search=&due-before=&due-after=&sort=&tag=`
 - `PATCH /tasks/:taskId`
 - `POST /tasks/:taskId/complete`
+- `DELETE /tasks/:taskId`
 - `POST /lists`
 - `GET /lists`
 - `GET /lists/:listId/memberships`

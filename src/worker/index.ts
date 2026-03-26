@@ -31,6 +31,10 @@ import type {
 
 interface Env {
   DB: D1Database;
+  ASSETS?: Fetcher;
+  WEB_UI_PASSWORD_HASH?: string;
+  WEB_UI_SESSION_SECRET?: string;
+  WEB_UI_BEARER_TOKEN?: string;
 }
 
 interface AuthContext {
@@ -68,6 +72,8 @@ const LIST_ROLE_RANK: Record<ListRole, number> = {
   viewer: 1
 };
 const TASK_SORTS: readonly TaskSort[] = ["default", "due_date_asc", "due_date_desc", "created_at_asc", "created_at_desc"];
+const UI_SESSION_COOKIE = "tiny_todo_ui_session";
+const UI_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
 
 const isIsoDate = (value: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(value);
 
@@ -323,6 +329,131 @@ const sha256Hex = async (value: string): Promise<string> => {
   const encoded = new TextEncoder().encode(value);
   const digest = await crypto.subtle.digest("SHA-256", encoded);
   return toHex(digest);
+};
+
+const parseCookies = (cookieHeader: string | null): Map<string, string> => {
+  const parsed = new Map<string, string>();
+  if (!cookieHeader) {
+    return parsed;
+  }
+
+  for (const entry of cookieHeader.split(";")) {
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const separatorIndex = trimmed.indexOf("=");
+    if (separatorIndex <= 0) {
+      continue;
+    }
+    const key = trimmed.slice(0, separatorIndex).trim();
+    const value = trimmed.slice(separatorIndex + 1).trim();
+    if (key) {
+      parsed.set(key, value);
+    }
+  }
+
+  return parsed;
+};
+
+const timingSafeEqual = (left: string, right: string): boolean => {
+  if (left.length !== right.length) {
+    return false;
+  }
+  let mismatch = 0;
+  for (let i = 0; i < left.length; i += 1) {
+    mismatch |= left.charCodeAt(i) ^ right.charCodeAt(i);
+  }
+  return mismatch === 0;
+};
+
+const hmacSha256Hex = async (secret: string, value: string): Promise<string> => {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value));
+  return toHex(signature);
+};
+
+const issueUiSessionCookie = async (env: Env): Promise<string | null> => {
+  const secret = env.WEB_UI_SESSION_SECRET;
+  if (!secret) {
+    return null;
+  }
+  const expiresAt = Date.now() + UI_SESSION_MAX_AGE_SECONDS * 1000;
+  const payload = String(expiresAt);
+  const signature = await hmacSha256Hex(secret, payload);
+  const value = `${payload}.${signature}`;
+  return `${UI_SESSION_COOKIE}=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${UI_SESSION_MAX_AGE_SECONDS}`;
+};
+
+const clearUiSessionCookie = (): string =>
+  `${UI_SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`;
+
+const hasValidUiSession = async (request: Request, env: Env): Promise<boolean> => {
+  const secret = env.WEB_UI_SESSION_SECRET;
+  if (!secret) {
+    return false;
+  }
+
+  const sessionValue = parseCookies(request.headers.get("cookie")).get(UI_SESSION_COOKIE);
+  if (!sessionValue) {
+    return false;
+  }
+
+  const [expiresAtRaw, signature] = sessionValue.split(".");
+  if (!expiresAtRaw || !signature) {
+    return false;
+  }
+
+  const expiresAt = Number(expiresAtRaw);
+  if (!Number.isFinite(expiresAt) || Date.now() >= expiresAt) {
+    return false;
+  }
+
+  const expectedSignature = await hmacSha256Hex(secret, expiresAtRaw);
+  return timingSafeEqual(signature, expectedSignature);
+};
+
+const mapAppPathToAssetPath = (pathname: string): string => {
+  if (pathname === "/" || pathname === "/index.html") {
+    return "/index.html";
+  }
+  if (pathname.startsWith("/assets/")) {
+    return pathname;
+  }
+  if (pathname === "/favicon.ico") {
+    return "/favicon.ico";
+  }
+  if (pathname === "/app" || pathname === "/app/") {
+    return "/index.html";
+  }
+  if (pathname.startsWith("/app/")) {
+    return pathname.slice("/app".length) || "/index.html";
+  }
+  return pathname;
+};
+
+const serveUiAsset = async (request: Request, env: Env): Promise<Response> => {
+  if (!env.ASSETS) {
+    return error("ASSETS binding is not configured", 500);
+  }
+  const assetPath = mapAppPathToAssetPath(new URL(request.url).pathname);
+  const assetUrl = new URL(request.url);
+  assetUrl.pathname = assetPath;
+
+  const assetResponse = await env.ASSETS.fetch(new Request(assetUrl.toString(), request));
+  if (assetResponse.status !== 404) {
+    return assetResponse;
+  }
+
+  const fallbackUrl = new URL(request.url);
+  fallbackUrl.pathname = "/index.html";
+  return env.ASSETS.fetch(new Request(fallbackUrl.toString(), request));
 };
 
 const parseJsonBody = async <T>(request: Request): Promise<T | null> => {
@@ -960,6 +1091,24 @@ const completeTask = async (
   return json({ task: mapTask(updated[0], tagsByTaskId.get(taskId) ?? []) });
 };
 
+const deleteTask = async (env: Env, auth: AuthContext, taskId: string): Promise<Response> => {
+  const db = dbForEnv(env);
+  const existingRows = await db.select().from(tasks).where(eq(tasks.id, taskId));
+  const existing = existingRows[0];
+  if (!existing) {
+    return error("task not found", 404);
+  }
+
+  const roleResult = await requireListRole(env, auth, existing.listId, "editor");
+  if (roleResult instanceof Response) {
+    return roleResult;
+  }
+
+  await db.delete(taskTags).where(eq(taskTags.taskId, taskId));
+  await db.delete(tasks).where(eq(tasks.id, taskId));
+  return json({ ok: true });
+};
+
 const createRecurrenceRule = async (
   request: Request,
   env: Env,
@@ -1461,7 +1610,7 @@ const routeListMembershipId = (pathname: string): { listId: string; userId: stri
   return { listId: decodeURIComponent(match[1]), userId: decodeURIComponent(match[2]) };
 };
 
-const handleFetch = async (request: Request, env: Env, requestContext: RequestContext): Promise<Response> => {
+const handleApiFetch = async (request: Request, env: Env, requestContext: RequestContext): Promise<Response> => {
   const { pathname } = new URL(request.url);
 
   if (pathname === "/health" && request.method === "GET") {
@@ -1493,6 +1642,9 @@ const handleFetch = async (request: Request, env: Env, requestContext: RequestCo
   }
   if (taskRoute && request.method === "POST" && taskRoute.complete) {
     return withRequestIdHeader(await completeTask(env, auth, taskRoute.taskId, requestContext), requestContext.requestId);
+  }
+  if (taskRoute && request.method === "DELETE" && !taskRoute.complete) {
+    return withRequestIdHeader(await deleteTask(env, auth, taskRoute.taskId), requestContext.requestId);
   }
 
   if (pathname === "/recurrence-rules" && request.method === "POST") {
@@ -1541,6 +1693,110 @@ const handleFetch = async (request: Request, env: Env, requestContext: RequestCo
   }
 
   return withRequestIdHeader(error("not found", 404), requestContext.requestId);
+};
+
+const uiSessionStatus = async (request: Request, env: Env, requestContext: RequestContext): Promise<Response> =>
+  withRequestIdHeader(json({ authenticated: await hasValidUiSession(request, env) }), requestContext.requestId);
+
+const uiSessionLogin = async (request: Request, env: Env, requestContext: RequestContext): Promise<Response> => {
+  if (!env.WEB_UI_PASSWORD_HASH) {
+    return withRequestIdHeader(error("WEB_UI_PASSWORD_HASH is not configured", 500), requestContext.requestId);
+  }
+  const payload = await parseJsonBody<{ password?: string }>(request);
+  const password = payload?.password?.trim() ?? "";
+  if (!password) {
+    return withRequestIdHeader(error("password is required", 422), requestContext.requestId);
+  }
+
+  const providedHash = await sha256Hex(password);
+  if (!timingSafeEqual(providedHash, env.WEB_UI_PASSWORD_HASH)) {
+    return withRequestIdHeader(error("invalid password", 401), requestContext.requestId);
+  }
+
+  const sessionCookie = await issueUiSessionCookie(env);
+  if (!sessionCookie) {
+    return withRequestIdHeader(error("WEB_UI_SESSION_SECRET is not configured", 500), requestContext.requestId);
+  }
+
+  const headers = new Headers({ "content-type": "application/json; charset=utf-8" });
+  headers.append("set-cookie", sessionCookie);
+  headers.set(REQUEST_ID_HEADER, requestContext.requestId);
+  return new Response(JSON.stringify({ ok: true }), { status: 200, headers });
+};
+
+const uiSessionLogout = (requestContext: RequestContext): Response => {
+  const headers = new Headers({ "content-type": "application/json; charset=utf-8" });
+  headers.append("set-cookie", clearUiSessionCookie());
+  headers.set(REQUEST_ID_HEADER, requestContext.requestId);
+  return new Response(JSON.stringify({ ok: true }), { status: 200, headers });
+};
+
+const uiMe = async (request: Request, env: Env, requestContext: RequestContext): Promise<Response> => {
+  if (!(await hasValidUiSession(request, env))) {
+    return withRequestIdHeader(error("unauthorized", 401), requestContext.requestId);
+  }
+  return withRequestIdHeader(json({ token: env.WEB_UI_BEARER_TOKEN ?? null }), requestContext.requestId);
+};
+
+const uiApiProxy = async (request: Request, env: Env, requestContext: RequestContext): Promise<Response> => {
+  if (!(await hasValidUiSession(request, env))) {
+    return withRequestIdHeader(error("unauthorized", 401), requestContext.requestId);
+  }
+  if (!env.WEB_UI_BEARER_TOKEN) {
+    return withRequestIdHeader(error("WEB_UI_BEARER_TOKEN is not configured", 500), requestContext.requestId);
+  }
+
+  const sourceUrl = new URL(request.url);
+  const proxiedPath = sourceUrl.pathname.replace(/^\/ui\/api/, "") || "/";
+  const targetUrl = new URL(sourceUrl.toString());
+  targetUrl.pathname = proxiedPath;
+
+  const proxyHeaders = new Headers(request.headers);
+  proxyHeaders.set("authorization", `Bearer ${env.WEB_UI_BEARER_TOKEN}`);
+  proxyHeaders.delete("cookie");
+
+  const proxiedInit: RequestInit = {
+    method: request.method,
+    headers: proxyHeaders
+  };
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    proxiedInit.body = await request.arrayBuffer();
+  }
+  const proxiedRequest = new Request(targetUrl.toString(), proxiedInit);
+
+  return handleApiFetch(proxiedRequest, env, requestContext);
+};
+
+const handleFetch = async (request: Request, env: Env, requestContext: RequestContext): Promise<Response> => {
+  const { pathname } = new URL(request.url);
+
+  if (pathname === "/favicon.ico") {
+    return withRequestIdHeader(new Response(null, { status: 204 }), requestContext.requestId);
+  }
+
+  if (pathname === "/ui/session" && request.method === "GET") {
+    return uiSessionStatus(request, env, requestContext);
+  }
+  if (pathname === "/ui/session" && request.method === "POST") {
+    return uiSessionLogin(request, env, requestContext);
+  }
+  if (pathname === "/ui/session" && request.method === "DELETE") {
+    return uiSessionLogout(requestContext);
+  }
+  if (pathname === "/ui/me" && request.method === "GET") {
+    return uiMe(request, env, requestContext);
+  }
+  if (pathname.startsWith("/ui/api/")) {
+    return uiApiProxy(request, env, requestContext);
+  }
+  if (pathname === "/" || pathname === "/index.html" || pathname.startsWith("/assets/")) {
+    return withRequestIdHeader(await serveUiAsset(request, env), requestContext.requestId);
+  }
+  if (pathname === "/app" || pathname === "/app/" || pathname.startsWith("/app/")) {
+    return withRequestIdHeader(new Response(null, { status: 307, headers: { location: "/" } }), requestContext.requestId);
+  }
+
+  return handleApiFetch(request, env, requestContext);
 };
 
 export default {
