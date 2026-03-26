@@ -64,6 +64,90 @@ afterEach(async () => {
 });
 
 describe("cli list json and filter flags", () => {
+  it("requires owner and project tags for add", async () => {
+    const result = await runCli(["add", "Task without tags"], "http://127.0.0.1:9999", "token");
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(
+      "--tag tags must include exactly one owner tag (owner:user or owner:agent) and one project:<slug> tag"
+    );
+  });
+
+  it("accepts required tags for add and sends create request", async () => {
+    const token = "add-token";
+    let seenMethod = "";
+    let seenPath = "";
+    let seenBody = "";
+
+    const server = createServer((request, response) => {
+      if (request.headers.authorization !== `Bearer ${token}`) {
+        response.statusCode = 401;
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ error: "invalid bearer token" }));
+        return;
+      }
+
+      if (request.method === "POST" && request.url === "/tasks") {
+        seenMethod = request.method;
+        seenPath = request.url;
+        request.setEncoding("utf8");
+        request.on("data", (chunk) => {
+          seenBody += chunk;
+        });
+        request.on("end", () => {
+          response.statusCode = 201;
+          response.setHeader("content-type", "application/json");
+          response.end(
+            JSON.stringify({
+              task: {
+                id: "task-new",
+                title: "Ship release",
+                note: null,
+                tags: ["owner:agent", "project:todos"],
+                status: "open",
+                dueDate: null,
+                recurrenceRuleId: null,
+                createdAt: "2026-03-01T00:00:00.000Z",
+                updatedAt: "2026-03-01T00:00:00.000Z",
+                completedAt: null
+              }
+            })
+          );
+        });
+        return;
+      }
+
+      response.statusCode = 404;
+      response.end();
+    });
+
+    servers.push(server);
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("failed to determine mock API port");
+    }
+
+    const result = await runCli(
+      ["add", "Ship release", "--tag", "owner:agent,project:todos"],
+      `http://127.0.0.1:${String(address.port)}`,
+      token
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("Created task task-new");
+    expect(result.stderr).toBe("");
+    expect(seenMethod).toBe("POST");
+    expect(seenPath).toBe("/tasks");
+    expect(JSON.parse(seenBody)).toEqual({
+      title: "Ship release",
+      tags: ["owner:agent", "project:todos"]
+    });
+  });
+
   it("rejects invalid due-before date format", async () => {
     const result = await runCli(["list", "--due-before", "03-01-2026"], "http://127.0.0.1:9999", "token");
 

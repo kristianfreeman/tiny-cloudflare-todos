@@ -141,10 +141,22 @@ const parseTagsOption = (rawValue: string | undefined): string[] | undefined => 
 
   const tags = rawValue
     .split(",")
-    .map((part) => part.trim())
+    .map((part) => part.trim().toLowerCase())
     .filter((part) => part.length > 0);
 
   return tags.length > 0 ? tags : undefined;
+};
+
+const requiredTagError =
+  "tags must include exactly one owner tag (owner:user or owner:agent) and one project:<slug> tag";
+
+const hasRequiredTaskTags = (tags: string[] | undefined): boolean => {
+  if (!tags || tags.length === 0) {
+    return false;
+  }
+  const ownerTags = tags.filter((tag) => tag === "owner:user" || tag === "owner:agent");
+  const projectTags = tags.filter((tag) => /^project:[a-z0-9][a-z0-9-]*$/.test(tag));
+  return ownerTags.length === 1 && projectTags.length === 1;
 };
 
 const printJson = (value: unknown): void => {
@@ -339,6 +351,9 @@ const main = async (): Promise<void> => {
     const tags = parseTagsOption(optionString(parsed.options, "tag"));
     if (due && !isIsoDate(due)) {
       throw new Error("--due must be YYYY-MM-DD");
+    }
+    if (!hasRequiredTaskTags(tags)) {
+      throw new Error(`--tag ${requiredTagError}`);
     }
 
     const payload: CreateTaskInput = { title };

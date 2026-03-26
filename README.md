@@ -295,6 +295,7 @@ curl -sS -X POST "$TODO_API_URL/jobs/materialize-recurrence" \
 ### CLI list/filter options (Phase 2)
 
 - `--json` prints raw API JSON for `list` and `recur-list`.
+- `add` requires tags that include exactly one owner tag (`owner:user` or `owner:agent`) and one `project:<slug>` tag.
 - `--tag owner:user,project:todos` tags a task on `add` and filters by tags on `list`.
 - `--list-id`, `--due-before`, `--due-after`, `--search`, and `--sort` are passed through to API query params.
 - `list` defaults to `--status open` and `limit=200`.

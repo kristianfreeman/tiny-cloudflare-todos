@@ -51,6 +51,8 @@ interface ApiError {
   error: string;
 }
 
+const REQUIRED_OWNER_TAGS = new Set(["owner:user", "owner:agent"]);
+
 const json = (data: unknown, status = 200): Response =>
   new Response(JSON.stringify(data), {
     status,
@@ -177,6 +179,21 @@ const normalizeTaskTags = (tags: string[] | null | undefined): string[] | null =
     .sort((left, right) => left.localeCompare(right));
 
   return normalized.length > 0 ? normalized : null;
+};
+
+const validateRequiredCreateTaskTags = (tags: string[] | null): string | null => {
+  if (!tags || tags.length === 0) {
+    return "tags must include exactly one owner tag (owner:user or owner:agent) and one project:<slug> tag";
+  }
+
+  const ownerTags = tags.filter((tag) => REQUIRED_OWNER_TAGS.has(tag));
+  const projectTags = tags.filter((tag) => /^project:[a-z0-9][a-z0-9-]*$/.test(tag));
+
+  if (ownerTags.length !== 1 || projectTags.length !== 1) {
+    return "tags must include exactly one owner tag (owner:user or owner:agent) and one project:<slug> tag";
+  }
+
+  return null;
 };
 
 const computeNextRunDate = (rule: typeof recurrenceRules.$inferSelect, fromDate: string): string => {
@@ -781,6 +798,9 @@ const createTask = async (
   requestContext: RequestContext
 ): Promise<Response> => {
   const payload = await parseJsonBody<CreateTaskInput>(request);
+  if (!payload) {
+    return error("invalid JSON body", 422);
+  }
   if (!payload?.title?.trim()) {
     return error("title is required", 422);
   }
@@ -795,6 +815,10 @@ const createTask = async (
   const normalizedTags = normalizeTaskTags(payload.tags);
   if (payload.tags !== undefined && payload.tags.length > 0 && !normalizedTags) {
     return error("tags must contain at least one non-empty value", 422);
+  }
+  const tagValidationError = validateRequiredCreateTaskTags(normalizedTags);
+  if (tagValidationError) {
+    return error(tagValidationError, 422);
   }
 
   const db = dbForEnv(env);

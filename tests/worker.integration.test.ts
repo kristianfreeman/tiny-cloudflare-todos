@@ -61,9 +61,13 @@ const createTask = async (
   context: WorkerTestContext,
   payload: { title: string; note?: string; dueDate?: string; listId?: string; tags?: string[] }
 ): Promise<{ id: string; title: string; note: string | null; dueDate: string | null; listId: string; tags: string[] }> => {
+  const payloadWithTags = {
+    ...payload,
+    tags: payload.tags ?? ["owner:user", "project:todos"]
+  };
   const response = await apiRequest(context, "/tasks", {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payloadWithTags)
   });
   expect(response.status).toBe(201);
   const body = await readJson<{
@@ -123,7 +127,12 @@ describe("worker integration", () => {
 
     const createResponse = await apiRequest(context, "/tasks", {
       method: "POST",
-      body: JSON.stringify({ title: "Write integration tests", note: "baseline", dueDate: "2026-04-01" })
+      body: JSON.stringify({
+        title: "Write integration tests",
+        note: "baseline",
+        dueDate: "2026-04-01",
+        tags: ["owner:user", "project:todos"]
+      })
     }, "valid", undefined, requestId);
     expect(createResponse.status).toBe(201);
     const created = await readJson<{
@@ -324,7 +333,11 @@ describe("worker integration", () => {
       "/tasks",
       {
         method: "POST",
-        body: JSON.stringify({ title: "shared task", listId: createListBody.list.id })
+        body: JSON.stringify({
+          title: "shared task",
+          listId: createListBody.list.id,
+          tags: ["owner:user", "project:todos"]
+        })
       },
       "valid",
       "editor-token"
@@ -412,6 +425,49 @@ describe("worker integration", () => {
     expect(projectTagResponse.status).toBe(200);
     const projectTagBody = await readJson<{ tasks: Array<{ id: string }> }>(projectTagResponse);
     expect(projectTagBody.tasks).toHaveLength(2);
+  });
+
+  it("requires owner and project tags on task creation", async () => {
+    const context = await newContext();
+
+    const invalidJson = await apiRequest(
+      context,
+      "/tasks",
+      {
+        method: "POST",
+        body: "{",
+        headers: { "content-type": "application/json" }
+      }
+    );
+    expect(invalidJson.status).toBe(422);
+    await expect(readJson<{ error: string }>(invalidJson)).resolves.toEqual({ error: "invalid JSON body" });
+
+    const missingTags = await apiRequest(context, "/tasks", {
+      method: "POST",
+      body: JSON.stringify({ title: "Missing tags" })
+    });
+    expect(missingTags.status).toBe(422);
+    await expect(readJson<{ error: string }>(missingTags)).resolves.toEqual({
+      error: "tags must include exactly one owner tag (owner:user or owner:agent) and one project:<slug> tag"
+    });
+
+    const invalidOwnerTag = await apiRequest(context, "/tasks", {
+      method: "POST",
+      body: JSON.stringify({ title: "Invalid owner tag", tags: ["owner:ops", "project:todos"] })
+    });
+    expect(invalidOwnerTag.status).toBe(422);
+    await expect(readJson<{ error: string }>(invalidOwnerTag)).resolves.toEqual({
+      error: "tags must include exactly one owner tag (owner:user or owner:agent) and one project:<slug> tag"
+    });
+
+    const invalidProjectTag = await apiRequest(context, "/tasks", {
+      method: "POST",
+      body: JSON.stringify({ title: "Invalid project tag", tags: ["owner:user", "project:"] })
+    });
+    expect(invalidProjectTag.status).toBe(422);
+    await expect(readJson<{ error: string }>(invalidProjectTag)).resolves.toEqual({
+      error: "tags must include exactly one owner tag (owner:user or owner:agent) and one project:<slug> tag"
+    });
   });
 
   it("filters tasks by due-before and due-after", async () => {

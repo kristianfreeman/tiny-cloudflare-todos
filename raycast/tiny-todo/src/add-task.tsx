@@ -15,6 +15,9 @@ interface AddTaskFormValues {
   tags?: string;
 }
 
+const requiredTagMessage =
+  "Tags must include exactly one owner tag (owner:user or owner:agent) and one project:<slug> tag";
+
 const formatDateForApi = (date: Date): string => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -42,11 +45,35 @@ export default function AddTaskCommand() {
     return [...new Set(tags)];
   };
 
+  const hasRequiredTaskTags = (tags: string[] | undefined): boolean => {
+    if (!tags || tags.length === 0) {
+      return false;
+    }
+
+    const ownerTags = tags.filter(
+      (tag) => tag === "owner:user" || tag === "owner:agent",
+    );
+    const projectTags = tags.filter((tag) =>
+      /^project:[a-z0-9][a-z0-9-]*$/.test(tag),
+    );
+    return ownerTags.length === 1 && projectTags.length === 1;
+  };
+
   const onSubmit = async (values: AddTaskFormValues): Promise<void> => {
     if (!values.title?.trim()) {
       await showToast({
         style: Toast.Style.Failure,
         title: "Title is required",
+      });
+      return;
+    }
+
+    const tags = parseTags(values.tags);
+    if (!hasRequiredTaskTags(tags)) {
+      await showToast({
+        style: Toast.Style.Failure,
+        title: "Required tags missing",
+        message: requiredTagMessage,
       });
       return;
     }
@@ -61,7 +88,7 @@ export default function AddTaskCommand() {
         title: values.title.trim(),
         note: values.note?.trim() || undefined,
         dueDate: values.dueDate ? formatDateForApi(values.dueDate) : undefined,
-        tags: parseTags(values.tags),
+        tags,
       });
       toast.style = Toast.Style.Success;
       toast.title = "Task created";
