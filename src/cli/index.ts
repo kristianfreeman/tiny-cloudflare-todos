@@ -10,14 +10,23 @@ interface ParsedArgs {
   options: Record<string, string | boolean>;
 }
 
+interface ListFilterOptions {
+  listId?: string;
+  dueBefore?: string;
+  dueAfter?: string;
+  search?: string;
+  sort?: string;
+}
+
 const usage = `
 tiny-todo CLI
 
 Commands:
   add <title> [--note <text>] [--due YYYY-MM-DD]
-  list [--status open|done|all]
+  list [--status open|done|all] [--list-id <id>] [--due-before YYYY-MM-DD] [--due-after YYYY-MM-DD] [--search <text>] [--sort <field>] [--json]
   done <task-id>
   recur <title-template> --cadence daily|weekly [--interval N] [--weekdays 1,3,5] [--note <text>] [--start YYYY-MM-DD] [--timezone Area/City] [--skip YYYY-MM-DD[,YYYY-MM-DD...]]
+  recur-list [--list-id <id>] [--due-before YYYY-MM-DD] [--due-after YYYY-MM-DD] [--search <text>] [--sort <field>] [--json]
   sync-agent [--out agent/snapshot.md]
   token-hash <token>
 
@@ -56,6 +65,71 @@ const parseArgs = (args: string[]): ParsedArgs => {
 
 const isIsoDate = (value: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(value);
 
+const optionString = (options: ParsedArgs["options"], key: string): string | undefined => {
+  const value = options[key];
+  return typeof value === "string" ? value.trim() : undefined;
+};
+
+const optionFlag = (options: ParsedArgs["options"], key: string): boolean => {
+  const value = options[key];
+  return value === true || value === "true";
+};
+
+const optionListFilters = (options: ParsedArgs["options"]): ListFilterOptions => {
+  const listId = optionString(options, "list-id");
+  const dueBefore = optionString(options, "due-before");
+  const dueAfter = optionString(options, "due-after");
+  const search = optionString(options, "search");
+  const sort = optionString(options, "sort");
+
+  if (dueBefore && !isIsoDate(dueBefore)) {
+    throw new Error("--due-before must be YYYY-MM-DD");
+  }
+  if (dueAfter && !isIsoDate(dueAfter)) {
+    throw new Error("--due-after must be YYYY-MM-DD");
+  }
+
+  const filters: ListFilterOptions = {};
+  if (listId) {
+    filters.listId = listId;
+  }
+  if (dueBefore) {
+    filters.dueBefore = dueBefore;
+  }
+  if (dueAfter) {
+    filters.dueAfter = dueAfter;
+  }
+  if (search) {
+    filters.search = search;
+  }
+  if (sort) {
+    filters.sort = sort;
+  }
+  return filters;
+};
+
+const appendListFilters = (params: URLSearchParams, filters: ListFilterOptions): void => {
+  if (filters.listId) {
+    params.set("list_id", filters.listId);
+  }
+  if (filters.dueBefore) {
+    params.set("due_before", filters.dueBefore);
+  }
+  if (filters.dueAfter) {
+    params.set("due_after", filters.dueAfter);
+  }
+  if (filters.search) {
+    params.set("search", filters.search);
+  }
+  if (filters.sort) {
+    params.set("sort", filters.sort);
+  }
+};
+
+const printJson = (value: unknown): void => {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+};
+
 const apiBaseUrl = process.env.TODO_API_URL ?? "http://127.0.0.1:8787";
 const apiToken = process.env.TODO_API_TOKEN;
 
@@ -90,18 +164,50 @@ const request = async <T>(pathName: string, init?: RequestInit): Promise<T> => {
   return body as T;
 };
 
+const formatTable = (headers: string[], rows: string[][]): string => {
+  const widths = headers.map((header, index) => {
+    let width = header.length;
+    for (const row of rows) {
+      const value = row[index] ?? "";
+      if (value.length > width) {
+        width = value.length;
+      }
+    }
+    return width;
+  });
+
+  const renderRow = (row: string[]): string =>
+    row
+      .map((cell, index) => {
+        const width = widths[index];
+        if (width === undefined) {
+          return cell;
+        }
+        return cell.padEnd(width, " ");
+      })
+      .join("  ")
+      .trimEnd();
+
+  const separator = widths.map((width) => "-".repeat(width)).join("  ");
+  return [renderRow(headers), separator, ...rows.map(renderRow)].join("\n");
+};
+
+const formatTaskStatus = (status: TaskDTO["status"]): string => (status === "done" ? "DONE" : "OPEN");
+
 const printTasks = (tasks: TaskDTO[]): void => {
   if (tasks.length === 0) {
     process.stdout.write("No tasks.\n");
     return;
   }
 
-  for (const task of tasks) {
-    const status = task.status === "done" ? "x" : " ";
-    const due = task.dueDate ? ` due:${task.dueDate}` : "";
-    const note = task.note ? ` | ${task.note}` : "";
-    process.stdout.write(`[${status}] ${task.id} ${task.title}${due}${note}\n`);
-  }
+  const rows = tasks.map((task) => [
+    task.id,
+    formatTaskStatus(task.status),
+    task.dueDate ?? "-",
+    task.title,
+    task.note ?? "-"
+  ]);
+  process.stdout.write(`${formatTable(["ID", "STATUS", "DUE", "TITLE", "NOTE"], rows)}\n`);
 };
 
 const formatRule = (rule: RecurrenceRuleDTO): string => {
@@ -109,6 +215,23 @@ const formatRule = (rule: RecurrenceRuleDTO): string => {
   const weekdays = rule.weekdays?.length ? ` weekdays:${rule.weekdays.join(",")}` : "";
   const exceptionDates = rule.exceptionDates?.length ? ` skip:${rule.exceptionDates.join(",")}` : "";
   return `${rule.id} ${rule.titleTemplate} (${cadence}${weekdays}) tz:${rule.timezone} next:${rule.nextRunDate}${exceptionDates}`;
+};
+
+const printRecurrenceRules = (rules: RecurrenceRuleDTO[]): void => {
+  if (rules.length === 0) {
+    process.stdout.write("No recurrence rules.\n");
+    return;
+  }
+
+  const rows = rules.map((rule) => [
+    rule.id,
+    `${rule.cadence}/${String(rule.interval)}`,
+    rule.nextRunDate,
+    rule.timezone,
+    rule.titleTemplate,
+    rule.exceptionDates?.length ? rule.exceptionDates.join(",") : "-"
+  ]);
+  process.stdout.write(`${formatTable(["ID", "CADENCE", "NEXT", "TZ", "TITLE", "SKIP"], rows)}\n`);
 };
 
 const deterministicTaskSort = (left: TaskDTO, right: TaskDTO): number => {
@@ -211,13 +334,37 @@ const main = async (): Promise<void> => {
 
   if (command === "list") {
     const parsed = parseArgs(rest);
-    const status = typeof parsed.options.status === "string" ? parsed.options.status : "open";
+    const status = optionString(parsed.options, "status") ?? "open";
     if (!["open", "done", "all"].includes(status)) {
       throw new Error("--status must be open, done, or all");
     }
 
-    const { tasks } = await request<{ tasks: TaskDTO[] }>(`/tasks?status=${status}&limit=200`);
+    const params = new URLSearchParams({ status, limit: "200" });
+    appendListFilters(params, optionListFilters(parsed.options));
+
+    const { tasks } = await request<{ tasks: TaskDTO[] }>(`/tasks?${params.toString()}`);
+    if (optionFlag(parsed.options, "json")) {
+      printJson({ tasks });
+      return;
+    }
     printTasks(tasks);
+    return;
+  }
+
+  if (command === "recur-list") {
+    const parsed = parseArgs(rest);
+    const params = new URLSearchParams();
+    appendListFilters(params, optionListFilters(parsed.options));
+    const query = params.toString();
+
+    const { recurrenceRules } = await request<{ recurrenceRules: RecurrenceRuleDTO[] }>(
+      query.length > 0 ? `/recurrence-rules?${query}` : "/recurrence-rules"
+    );
+    if (optionFlag(parsed.options, "json")) {
+      printJson({ recurrenceRules });
+      return;
+    }
+    printRecurrenceRules(recurrenceRules);
     return;
   }
 

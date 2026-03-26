@@ -12,7 +12,7 @@ Small REST-first todo platform on Cloudflare Workers + D1 with Drizzle ORM and a
 - Idempotent POST support for task creation and recurrence materialization retries.
 - Phase 2 baseline observability: request IDs, structured JSON logs, and mutation audit events.
 - Daily cron trigger (`0 0 * * *`) that materializes recurring tasks.
-- CLI: `add`, `list`, `done`, `recur`, `sync-agent`, `token-hash`.
+- CLI: `add`, `list`, `done`, `recur`, `recur-list`, `sync-agent`, `token-hash`.
 - Deterministic local markdown snapshot for agent prompt ingestion.
 
 ## Quick start (local)
@@ -57,8 +57,10 @@ Small REST-first todo platform on Cloudflare Workers + D1 with Drizzle ORM and a
    export TODO_API_TOKEN="change-me-for-local-dev"
 
    npm run cli -- add "Write docs" --due 2026-03-26
-   npm run cli -- list --status open
+   npm run cli -- list --status open --sort due_date:asc
+   npm run cli -- list --status all --search docs --due-before 2026-03-31 --json
    npm run cli -- recur "Daily standup note" --cadence daily --interval 1 --timezone America/New_York --skip 2026-03-27,2026-03-31
+   npm run cli -- recur-list --sort next_run_date:asc --json
    npm run cli -- done <task-id>
    npm run cli -- sync-agent --out agent/snapshot.md
    ```
@@ -100,7 +102,6 @@ SHA-256 hashed and looked up in `api_tokens.token_hash`; requests run with that 
 
 - `GET /health`
 - `POST /tasks`
-- `GET /tasks?status=open|done|all&limit=100&offset=0&listId=<optional-list-id>`
 - `GET /tasks?status=open|done|all&limit=100&offset=0&listId=<optional-list-id>&search=&due-before=&due-after=&sort=`
 - `PATCH /tasks/:taskId`
 - `POST /tasks/:taskId/complete`
@@ -226,6 +227,12 @@ curl -sS -X POST "$TODO_API_URL/jobs/materialize-recurrence" \
 
 - `--timezone Area/City` sets recurrence timezone.
 - `--skip YYYY-MM-DD[,YYYY-MM-DD...]` sets exception dates.
+
+### CLI list/filter options (Phase 2)
+
+- `--json` prints raw API JSON for `list` and `recur-list`.
+- `--list-id`, `--due-before`, `--due-after`, `--search`, and `--sort` are passed through to API query params.
+- `list` defaults to `--status open` and `limit=200`.
 
 ## Notes for deploy
 
