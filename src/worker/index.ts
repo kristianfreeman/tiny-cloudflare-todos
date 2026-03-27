@@ -990,10 +990,22 @@ const listTasks = async (request: Request, env: Env, auth: AuthContext): Promise
     .limit(safeLimit)
     .offset(safeOffset);
 
-  const tagsByTaskId = await loadTaskTagsByTaskId(
-    env,
-    rows.map((row) => row.id)
-  );
+  const tagRows = await db
+    .select({ taskId: taskTags.taskId, tag: taskTags.tag })
+    .from(taskTags)
+    .innerJoin(tasks, eq(tasks.id, taskTags.taskId))
+    .where(and(eq(taskTags.userId, auth.userId), inArray(tasks.listId, allowedListIds)))
+    .orderBy(asc(taskTags.taskId), asc(taskTags.tag));
+
+  const tagsByTaskId = new Map<string, string[]>();
+  for (const row of tagRows) {
+    const existing = tagsByTaskId.get(row.taskId);
+    if (existing) {
+      existing.push(row.tag);
+      continue;
+    }
+    tagsByTaskId.set(row.taskId, [row.tag]);
+  }
 
   return json({ tasks: rows.map((row) => mapTask(row, tagsByTaskId.get(row.id) ?? [])) } satisfies ListTasksResponse);
 };

@@ -487,6 +487,43 @@ describe("worker integration", () => {
     expect(body.analytics.guidance.interpretationHints.length).toBeGreaterThan(0);
   });
 
+  it("handles analytics tag breakdowns with more than 999 visible tasks", async () => {
+    const context = await newContext();
+    const now = new Date().toISOString();
+    const bulkListId = await createList(context, "Bulk Analytics");
+    const statements: ReturnType<D1Database["prepare"]>[] = [];
+
+    for (let index = 0; index < 1005; index += 1) {
+      const taskId = `bulk-task-${index}`;
+      statements.push(
+        context.env.DB.prepare(
+          `INSERT INTO tasks (id, user_id, list_id, title, note, status, due_date, recurrence_rule_id, created_at, updated_at, completed_at)
+           VALUES (?, ?, ?, ?, NULL, ?, NULL, NULL, ?, ?, NULL)`
+        ).bind(taskId, "test-user", bulkListId, `Bulk ${index}`, "open", now, now)
+      );
+      statements.push(
+        context.env.DB.prepare(`INSERT INTO task_tags (task_id, user_id, tag, created_at) VALUES (?, ?, ?, ?)`)
+          .bind(taskId, "test-user", "owner:user", now)
+      );
+      statements.push(
+        context.env.DB.prepare(`INSERT INTO task_tags (task_id, user_id, tag, created_at) VALUES (?, ?, ?, ?)`)
+          .bind(taskId, "test-user", "project:todos", now)
+      );
+    }
+
+    await context.env.DB.batch(statements);
+
+    const response = await apiRequest(context, "/analytics/overview?days=30", { method: "GET" });
+    expect(response.status).toBe(200);
+    const body = await readJson<{ analytics: { totals: { tasksVisible: number }; breakdowns: { project: Array<{ projectTag: string }> } } }>(
+      response
+    );
+    expect(body.analytics.totals.tasksVisible).toBe(1005);
+    expect(body.analytics.breakdowns.project).toEqual(
+      expect.arrayContaining([expect.objectContaining({ projectTag: "project:todos" })])
+    );
+  });
+
   it("requires owner and project tags on task creation", async () => {
     const context = await newContext();
 

@@ -182,14 +182,27 @@ export function App() {
 
   const loadTasks = async (): Promise<void> => {
     setLoadingTasks(true);
-    const response = await fetch("/ui/api/tasks?status=all", { method: "GET" });
-    if (!response.ok) {
-      setTaskError(await readError(response));
+    const [openResponse, doneResponse] = await Promise.all([
+      fetch("/ui/api/tasks?status=open&limit=500", { method: "GET" }),
+      fetch("/ui/api/tasks?status=done&limit=500", { method: "GET" })
+    ]);
+    if (!openResponse.ok) {
+      setTaskError(await readError(openResponse));
       setLoadingTasks(false);
       return;
     }
-    const payload = (await response.json()) as TasksResponse;
-    setTasks(payload.tasks);
+    if (!doneResponse.ok) {
+      setTaskError(await readError(doneResponse));
+      setLoadingTasks(false);
+      return;
+    }
+
+    const [openPayload, donePayload] = (await Promise.all([
+      openResponse.json(),
+      doneResponse.json()
+    ])) as [TasksResponse, TasksResponse];
+
+    setTasks([...openPayload.tasks, ...donePayload.tasks]);
     setTaskError(null);
     setLoadingTasks(false);
   };
