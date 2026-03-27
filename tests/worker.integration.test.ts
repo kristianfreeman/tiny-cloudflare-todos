@@ -447,7 +447,7 @@ describe("worker integration", () => {
     expect(response.status).toBe(200);
     const body = await readJson<{
       analytics: {
-        window: { days: number; timeZone: string };
+        window: { days: number; timeZone: string; startDate: string; endDate: string };
         totals: {
           tasksVisible: number;
           openNow: number;
@@ -468,6 +468,8 @@ describe("worker integration", () => {
 
     expect(body.analytics.window.days).toBe(30);
     expect(body.analytics.window.timeZone).toBe("UTC");
+    expect(body.analytics.window.startDate >= "2026-03-24").toBe(true);
+    expect(body.analytics.window.startDate <= body.analytics.window.endDate).toBe(true);
     expect(body.analytics.totals.tasksVisible).toBe(2);
     expect(body.analytics.totals.openNow).toBe(1);
     expect(body.analytics.totals.doneNow).toBe(1);

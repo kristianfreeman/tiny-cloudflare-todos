@@ -76,6 +76,7 @@ const LIST_ROLE_RANK: Record<ListRole, number> = {
 const TASK_SORTS: readonly TaskSort[] = ["default", "due_date_asc", "due_date_desc", "created_at_asc", "created_at_desc"];
 const UI_SESSION_COOKIE = "tiny_todo_ui_session";
 const UI_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
+const ANALYTICS_THROUGHPUT_START_DATE = "2026-03-24";
 
 const isIsoDate = (value: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(value);
 
@@ -1055,7 +1056,8 @@ const analyticsOverview = async (request: Request, env: Env, auth: AuthContext):
 
   const days = Number.isFinite(daysRaw) ? Math.max(1, Math.min(365, Math.floor(daysRaw))) : 30;
   const endDate = todayIsoInTimezone(timeZone);
-  const startDate = addDays(endDate, -(days - 1));
+  const requestedStartDate = addDays(endDate, -(days - 1));
+  const startDate = requestedStartDate < ANALYTICS_THROUGHPUT_START_DATE ? ANALYTICS_THROUGHPUT_START_DATE : requestedStartDate;
 
   let allowedListIds: string[];
   if (listId) {
@@ -1095,6 +1097,7 @@ const analyticsOverview = async (request: Request, env: Env, auth: AuthContext):
             completionRateInWindow: "completedInWindow / createdInWindow; returns 0 when createdInWindow is 0.",
             overdueOpen: "Open tasks where dueDate is before today (UTC).",
             timeZone: `Window boundaries and daily aggregation use ${timeZone}.`,
+            throughputStartAnchor: `Throughput analytics do not include days before ${ANALYTICS_THROUGHPUT_START_DATE}.`,
             tasksVisible: "All tasks the caller can read after list membership filtering."
           },
           interpretationHints: [
@@ -1149,9 +1152,10 @@ const analyticsOverview = async (request: Request, env: Env, auth: AuthContext):
   }
 
   const daily = new Map<string, { date: string; created: number; completed: number }>();
-  for (let offset = days - 1; offset >= 0; offset -= 1) {
-    const date = addDays(endDate, -offset);
-    daily.set(date, { date, created: 0, completed: 0 });
+  let cursor = startDate;
+  while (cursor <= endDate) {
+    daily.set(cursor, { date: cursor, created: 0, completed: 0 });
+    cursor = addDays(cursor, 1);
   }
 
   const ownerBreakdown = new Map<string, { owner: string; openNow: number; createdInWindow: number; completedInWindow: number }>();
@@ -1274,6 +1278,7 @@ const analyticsOverview = async (request: Request, env: Env, auth: AuthContext):
           completionRateInWindow: "completedInWindow / createdInWindow; returns 0 when createdInWindow is 0.",
           overdueOpen: "Open tasks where dueDate is before today in the selected timezone.",
           timeZone: `Window boundaries and daily aggregation use ${timeZone}.`,
+          throughputStartAnchor: `Throughput analytics do not include days before ${ANALYTICS_THROUGHPUT_START_DATE}.`,
           tasksVisible: "All tasks the caller can read after list membership filtering."
         },
         interpretationHints: [
