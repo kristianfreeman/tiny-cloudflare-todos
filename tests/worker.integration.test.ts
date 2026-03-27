@@ -647,6 +647,37 @@ describe("worker integration", () => {
     });
   });
 
+  it("requires owner and project tags when replacing task tags", async () => {
+    const context = await newContext();
+    const created = await createTask(context, { title: "Patch tag validation" });
+
+    const missingProjectTag = await apiRequest(context, `/tasks/${encodeURIComponent(created.id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title: "Patch tag validation (1)", tags: ["owner:user"] })
+    });
+    expect(missingProjectTag.status).toBe(422);
+    await expect(readJson<{ error: string }>(missingProjectTag)).resolves.toEqual({
+      error: "tags must include exactly one owner tag (owner:user or owner:agent) and one project:<slug> tag"
+    });
+
+    const duplicateProjectTag = await apiRequest(context, `/tasks/${encodeURIComponent(created.id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title: "Patch tag validation (2)", tags: ["owner:user", "project:home", "project:todos"] })
+    });
+    expect(duplicateProjectTag.status).toBe(422);
+    await expect(readJson<{ error: string }>(duplicateProjectTag)).resolves.toEqual({
+      error: "tags must include exactly one owner tag (owner:user or owner:agent) and one project:<slug> tag"
+    });
+
+    const validReplacement = await apiRequest(context, `/tasks/${encodeURIComponent(created.id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title: "Patch tag validation (3)", tags: ["owner:agent", "project:todos"] })
+    });
+    expect(validReplacement.status).toBe(200);
+    const body = await readJson<{ task: { tags: string[] } }>(validReplacement);
+    expect(body.task.tags).toEqual(["owner:agent", "project:todos"]);
+  });
+
   it("filters tasks by due-before and due-after", async () => {
     const context = await newContext();
 

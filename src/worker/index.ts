@@ -1323,6 +1323,10 @@ const updateTask = async (
     if (payload.tags.length > 0 && !normalizedTags) {
       return error("tags must contain at least one non-empty value", 422);
     }
+    const tagValidationError = validateRequiredCreateTaskTags(normalizedTags);
+    if (tagValidationError) {
+      return error(tagValidationError, 422);
+    }
   }
   if (payload.status !== undefined) {
     if (payload.status !== "open" && payload.status !== "done") {

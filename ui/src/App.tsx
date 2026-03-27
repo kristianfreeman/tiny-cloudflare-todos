@@ -96,9 +96,10 @@ const groupTasksByTag = (tasks: Task[]): TaskGroup[] => {
   const grouped = new Map<string, Task[]>();
   for (const task of tasks) {
     const tags = task.tags.filter((tag) => !tag.startsWith("owner:"));
-    const groupingTags = tags.length > 0 ? tags : ["untagged"];
+    const projectTags = tags.filter((tag) => tag.startsWith("project:"));
+    const groupingTags = projectTags.length > 0 ? tags : [...tags, "project:unknown"];
     for (const tag of groupingTags) {
-      const key = tag.trim() || "untagged";
+      const key = tag.trim() || "project:unknown";
       const existing = grouped.get(key);
       if (existing) {
         existing.push(task);
@@ -111,9 +112,6 @@ const groupTasksByTag = (tasks: Task[]): TaskGroup[] => {
   const tagRank = (tag: string): number => {
     if (tag.startsWith("project:")) {
       return 0;
-    }
-    if (tag === "untagged") {
-      return 2;
     }
     return 1;
   };
