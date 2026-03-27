@@ -203,10 +203,11 @@ SHA-256 hashed and looked up in `api_tokens.token_hash`; requests run with that 
 
 - `days` (optional): lookback window, defaults to `30`, clamped to `1..365`.
 - `listId` / `list_id` (optional): scope analytics to a readable list.
+- `timeZone` (optional): IANA timezone used for window/day aggregation, defaults to `UTC`.
 
 Response includes agent-friendly sections:
 
-- `window`: explicit date bounds used for calculations.
+- `window`: explicit date bounds plus `timeZone` used for calculations.
 - `totals`: backlog/throughput summary (`openNow`, `overdueOpen`, `createdInWindow`, `completedInWindow`, `completionRateInWindow`).
 - `daily`: per-day created/completed counts for charting.
 - `breakdowns`: owner and project slices for routing work.

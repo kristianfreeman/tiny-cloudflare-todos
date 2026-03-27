@@ -134,6 +134,34 @@ const timestampToIsoDate = (value: string | null | undefined): string | null => 
   return parsed.toISOString().slice(0, 10);
 };
 
+const toIsoDateInTimezone = (date: Date, timeZone: string): string => {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+  const parts = formatter.formatToParts(date);
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  if (!year || !month || !day) {
+    return dateToIso(date);
+  }
+  return `${year}-${month}-${day}`;
+};
+
+const timestampToIsoDateInTimezone = (value: string | null | undefined, timeZone: string): string | null => {
+  if (!value) {
+    return null;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return timestampToIsoDate(value);
+  }
+  return toIsoDateInTimezone(parsed, timeZone);
+};
+
 const addDays = (value: string, amount: number): string => {
   const date = toDate(value);
   date.setUTCDate(date.getUTCDate() + amount);
@@ -1014,15 +1042,19 @@ const analyticsOverview = async (request: Request, env: Env, auth: AuthContext):
   const db = dbForEnv(env);
   const url = new URL(request.url);
   const daysRaw = Number(url.searchParams.get("days") ?? "30");
+  const timeZone = (url.searchParams.get("timeZone") ?? "UTC").trim() || "UTC";
   const listIdParam = url.searchParams.get("listId") ?? url.searchParams.get("list_id");
   const listId = listIdParam?.trim() ?? null;
 
   if (listId !== null && !listId) {
     return error("list_id cannot be empty", 422);
   }
+  if (!isValidTimeZone(timeZone)) {
+    return error("timeZone must be a valid IANA timezone", 422);
+  }
 
   const days = Number.isFinite(daysRaw) ? Math.max(1, Math.min(365, Math.floor(daysRaw))) : 30;
-  const endDate = todayIsoInTimezone("UTC");
+  const endDate = todayIsoInTimezone(timeZone);
   const startDate = addDays(endDate, -(days - 1));
 
   let allowedListIds: string[];
@@ -1041,7 +1073,7 @@ const analyticsOverview = async (request: Request, env: Env, auth: AuthContext):
       analytics: {
         schemaVersion: "2026-03-27",
         generatedAt: new Date().toISOString(),
-        window: { days, startDate, endDate },
+        window: { days, startDate, endDate, timeZone },
         totals: {
           tasksVisible: 0,
           openNow: 0,
@@ -1062,6 +1094,7 @@ const analyticsOverview = async (request: Request, env: Env, auth: AuthContext):
             completedInWindow: `Tasks with completedAt between ${startDate} and ${endDate}, inclusive.`,
             completionRateInWindow: "completedInWindow / createdInWindow; returns 0 when createdInWindow is 0.",
             overdueOpen: "Open tasks where dueDate is before today (UTC).",
+            timeZone: `Window boundaries and daily aggregation use ${timeZone}.`,
             tasksVisible: "All tasks the caller can read after list membership filtering."
           },
           interpretationHints: [
@@ -1102,7 +1135,7 @@ const analyticsOverview = async (request: Request, env: Env, auth: AuthContext):
       .select({ taskId: taskTags.taskId, tag: taskTags.tag })
       .from(taskTags)
       .innerJoin(tasks, eq(tasks.id, taskTags.taskId))
-      .where(and(eq(taskTags.userId, auth.userId), inArray(tasks.listId, chunk)))
+      .where(inArray(tasks.listId, chunk))
       .orderBy(asc(taskTags.taskId), asc(taskTags.tag));
 
     for (const row of tagRows) {
@@ -1134,8 +1167,8 @@ const analyticsOverview = async (request: Request, env: Env, auth: AuthContext):
   let completedInWindow = 0;
 
   for (const row of rows) {
-    const createdDay = timestampToIsoDate(row.createdAt);
-    const completedDay = timestampToIsoDate(row.completedAt);
+    const createdDay = timestampToIsoDateInTimezone(row.createdAt, timeZone);
+    const completedDay = timestampToIsoDateInTimezone(row.completedAt, timeZone);
     const tags = tagsByTaskId.get(row.id) ?? [];
 
     const ownerTag = tags.find((tag) => tag === "owner:user" || tag === "owner:agent") ?? "owner:unknown";
@@ -1219,7 +1252,7 @@ const analyticsOverview = async (request: Request, env: Env, auth: AuthContext):
     analytics: {
       schemaVersion: "2026-03-27",
       generatedAt: new Date().toISOString(),
-      window: { days, startDate, endDate },
+      window: { days, startDate, endDate, timeZone },
       totals: {
         tasksVisible: rows.length,
         openNow,
@@ -1239,7 +1272,8 @@ const analyticsOverview = async (request: Request, env: Env, auth: AuthContext):
           createdInWindow: `Tasks with createdAt between ${startDate} and ${endDate}, inclusive.`,
           completedInWindow: `Tasks with completedAt between ${startDate} and ${endDate}, inclusive.`,
           completionRateInWindow: "completedInWindow / createdInWindow; returns 0 when createdInWindow is 0.",
-          overdueOpen: "Open tasks where dueDate is before today (UTC).",
+          overdueOpen: "Open tasks where dueDate is before today in the selected timezone.",
+          timeZone: `Window boundaries and daily aggregation use ${timeZone}.`,
           tasksVisible: "All tasks the caller can read after list membership filtering."
         },
         interpretationHints: [

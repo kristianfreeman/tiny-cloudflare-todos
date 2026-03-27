@@ -447,7 +447,7 @@ describe("worker integration", () => {
     expect(response.status).toBe(200);
     const body = await readJson<{
       analytics: {
-        window: { days: number };
+        window: { days: number; timeZone: string };
         totals: {
           tasksVisible: number;
           openNow: number;
@@ -467,6 +467,7 @@ describe("worker integration", () => {
     }>(response);
 
     expect(body.analytics.window.days).toBe(30);
+    expect(body.analytics.window.timeZone).toBe("UTC");
     expect(body.analytics.totals.tasksVisible).toBe(2);
     expect(body.analytics.totals.openNow).toBe(1);
     expect(body.analytics.totals.doneNow).toBe(1);
@@ -485,6 +486,50 @@ describe("worker integration", () => {
     );
     expect((body.analytics.guidance.definitions.tasksVisible ?? "").length).toBeGreaterThan(0);
     expect(body.analytics.guidance.interpretationHints.length).toBeGreaterThan(0);
+  });
+
+  it("includes tag breakdowns for tasks created by other list members", async () => {
+    const context = await newContext();
+    await context.createUserToken({ userId: "editor-user", token: "editor-token" });
+
+    const sharedListId = await createList(context, "Shared Analytics");
+    const addEditorResponse = await apiRequest(context, `/lists/${sharedListId}/memberships/editor-user`, {
+      method: "PUT",
+      body: JSON.stringify({ role: "editor" })
+    });
+    expect(addEditorResponse.status).toBe(200);
+
+    const createByEditor = await apiRequest(
+      context,
+      "/tasks",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          title: "Editor task",
+          listId: sharedListId,
+          tags: ["owner:agent", "project:todos"]
+        })
+      },
+      "valid",
+      "editor-token"
+    );
+    expect(createByEditor.status).toBe(201);
+
+    const analyticsAsOwner = await apiRequest(context, "/analytics/overview?days=30", { method: "GET" });
+    expect(analyticsAsOwner.status).toBe(200);
+    const body = await readJson<{
+      analytics: {
+        breakdowns: {
+          owner: Array<{ owner: string }>;
+          project: Array<{ projectTag: string }>;
+        };
+      };
+    }>(analyticsAsOwner);
+
+    expect(body.analytics.breakdowns.owner).toEqual(expect.arrayContaining([expect.objectContaining({ owner: "owner:agent" })]));
+    expect(body.analytics.breakdowns.project).toEqual(
+      expect.arrayContaining([expect.objectContaining({ projectTag: "project:todos" })])
+    );
   });
 
   it("handles analytics tag breakdowns with more than 999 visible tasks", async () => {

@@ -61,6 +61,7 @@ interface AnalyticsResponse {
       days: number;
       startDate: string;
       endDate: string;
+      timeZone: string;
     };
     totals: {
       tasksVisible: number;
@@ -135,6 +136,8 @@ const dayLabel = (isoDay: string): string => {
   }
   return parsed.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 };
+
+const browserTimeZone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
 export function App() {
   const [sessionChecked, setSessionChecked] = useState(false);
@@ -218,7 +221,11 @@ export function App() {
 
   const loadAnalytics = async (): Promise<void> => {
     setLoadingAnalytics(true);
-    const response = await fetch(`/ui/api/analytics/overview?days=${analyticsDays}`, { method: "GET" });
+    const timeZone = browserTimeZone();
+    const response = await fetch(
+      `/ui/api/analytics/overview?days=${analyticsDays}&timeZone=${encodeURIComponent(timeZone)}`,
+      { method: "GET" }
+    );
     if (!response.ok) {
       setAnalyticsError(await readError(response));
       setLoadingAnalytics(false);
@@ -511,6 +518,11 @@ export function App() {
             </h2>
             {loadingAnalytics ? <span className="task-meta">Loading...</span> : null}
           </header>
+          {analytics ? (
+            <p className="task-meta">
+              Window: {analytics.window.startDate} to {analytics.window.endDate} ({analytics.window.timeZone})
+            </p>
+          ) : null}
           {analyticsError ? <p className="error-text">{analyticsError}</p> : null}
 
           <div className="metrics-grid">
