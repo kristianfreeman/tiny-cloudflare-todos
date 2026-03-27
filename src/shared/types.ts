@@ -39,7 +39,7 @@ export interface CreateTaskInput {
 
 export interface UpdateTaskInput {
   title?: string;
-  note?: string;
+  note?: string | null;
   dueDate?: string | null;
   listId?: string;
   tags?: string[];
