@@ -12,9 +12,9 @@ The extension uses required preferences, so Raycast prompts for these values bef
 
 ## Commands
 
-- **Task Inbox**: Review open/done tasks with owner-scope and tag filters, search, and complete tasks.
+- **Task Inbox**: Review open/done tasks with owner-scope and tag filters, search, open task details, and toggle complete/incomplete.
 - **Quick Add Task**: Create a task with optional note, due date, and tags.
-- **Tasks by Tag**: Open a focused list for a specific tag like `owner:agent` or `project:docs`.
+- **Tasks by Tag**: Open a focused list for a specific tag like `owner:agent` or `project:docs`, with detail view and undo support.
 
 ## CI Build + Publish
 

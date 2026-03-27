@@ -1303,6 +1303,8 @@ const updateTask = async (
     return error("invalid JSON body", 422);
   }
 
+  let nextStatus: TaskStatus | undefined;
+
   const updates: Partial<typeof tasks.$inferInsert> = {
     updatedAt: new Date().toISOString()
   };
@@ -1335,6 +1337,13 @@ const updateTask = async (
       return error("tags must contain at least one non-empty value", 422);
     }
   }
+  if (payload.status !== undefined) {
+    if (payload.status !== "open" && payload.status !== "done") {
+      return error("status must be open or done", 422);
+    }
+    nextStatus = payload.status;
+    updates.status = payload.status;
+  }
   if (Object.keys(updates).length === 1) {
     return error("no updates provided", 422);
   }
@@ -1349,6 +1358,11 @@ const updateTask = async (
   if (roleResult instanceof Response) {
     return roleResult;
   }
+
+  if (nextStatus) {
+    updates.completedAt = nextStatus === "done" ? existing.completedAt ?? updates.updatedAt ?? new Date().toISOString() : null;
+  }
+
   await db.update(tasks).set(updates).where(eq(tasks.id, taskId));
   if (payload.tags !== undefined) {
     await syncTaskTags(env, taskId, existing.userId, normalizeTaskTags(payload.tags));

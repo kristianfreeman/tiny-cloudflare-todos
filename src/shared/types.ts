@@ -43,6 +43,7 @@ export interface UpdateTaskInput {
   dueDate?: string | null;
   listId?: string;
   tags?: string[];
+  status?: TaskStatus;
 }
 
 export type TaskSort = "default" | "due_date_asc" | "due_date_desc" | "created_at_asc" | "created_at_desc";

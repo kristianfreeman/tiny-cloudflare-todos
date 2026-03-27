@@ -179,8 +179,28 @@ describe("worker integration", () => {
     expect(listedDone.tasks[0]?.id).toBe(created.task.id);
     expect(listedDone.tasks[0]?.status).toBe("done");
 
+    const reopenResponse = await apiRequest(
+      context,
+      `/tasks/${created.task.id}`,
+      { method: "PATCH", body: JSON.stringify({ status: "open" }) },
+      "valid",
+      undefined,
+      requestId
+    );
+    expect(reopenResponse.status).toBe(200);
+    const reopened = await readJson<{ task: { status: string; completedAt: string | null } }>(reopenResponse);
+    expect(reopened.task.status).toBe("open");
+    expect(reopened.task.completedAt).toBeNull();
+
+    const listOpenAgainResponse = await apiRequest(context, "/tasks?status=open&limit=50", { method: "GET" });
+    expect(listOpenAgainResponse.status).toBe(200);
+    const listedOpenAgain = await readJson<{ tasks: Array<{ id: string; status: string }> }>(listOpenAgainResponse);
+    expect(listedOpenAgain.tasks).toHaveLength(1);
+    expect(listedOpenAgain.tasks[0]?.id).toBe(created.task.id);
+    expect(listedOpenAgain.tasks[0]?.status).toBe("open");
+
     const auditEvents = await queryAuditEvents(context);
-    expect(auditEvents.map((row) => row.event_type)).toEqual(["task.created", "task.updated", "task.completed"]);
+    expect(auditEvents.map((row) => row.event_type)).toEqual(["task.created", "task.updated", "task.completed", "task.updated"]);
     expect(auditEvents.every((row) => row.actor_user_id === "test-user")).toBe(true);
     expect(auditEvents.every((row) => row.resource_type === "task")).toBe(true);
     expect(auditEvents.every((row) => row.resource_id === created.task.id)).toBe(true);

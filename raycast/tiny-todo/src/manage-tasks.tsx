@@ -1,6 +1,7 @@
 import {
   Action,
   ActionPanel,
+  Detail,
   Icon,
   List,
   showToast,
@@ -15,6 +16,7 @@ import {
   getDefaultStatusFilter,
   listTasks,
   type OwnerScope,
+  reopenTask,
   type TaskStatus,
   type TodoTask,
 } from "./api";
@@ -38,17 +40,17 @@ const dueLabel = (task: TodoTask): string => {
   return `Due ${task.dueDate}`;
 };
 
-const subtitle = (task: TodoTask): string => {
+const tagsLabel = (task: TodoTask): string => {
   const taskTags = Array.isArray(task.tags) ? task.tags : [];
-  if (task.note && task.note.trim().length > 0) {
-    return task.note;
-  }
+  return taskTags.length > 0 ? taskTags.join(" · ") : "No tags";
+};
 
-  if (taskTags.length > 0) {
-    return taskTags.join(", ");
+const detailMarkdown = (task: TodoTask): string => {
+  const note = task.note?.trim();
+  if (note && note.length > 0) {
+    return note;
   }
-
-  return dueLabel(task);
+  return "_No notes_";
 };
 
 const matchesSearch = (task: TodoTask, query: string): boolean => {
@@ -91,6 +93,84 @@ const ownerScopeTitle = (scope: OwnerScope): string => {
     return "Agent Tasks";
   }
   return "All Tasks";
+};
+
+interface TaskDetailViewProps {
+  task: TodoTask;
+  onCompleteTask: (task: TodoTask) => Promise<void>;
+  onReopenTask: (task: TodoTask) => Promise<void>;
+  onRefresh: () => Promise<void>;
+  onQuickAdd: () => void;
+}
+
+const TaskDetailView = ({
+  task,
+  onCompleteTask,
+  onReopenTask,
+  onRefresh,
+  onQuickAdd,
+}: TaskDetailViewProps) => {
+  const { pop } = useNavigation();
+
+  const handleComplete = async (): Promise<void> => {
+    await onCompleteTask(task);
+    pop();
+  };
+
+  const handleReopen = async (): Promise<void> => {
+    await onReopenTask(task);
+    pop();
+  };
+
+  return (
+    <Detail
+      navigationTitle="Task Details"
+      markdown={detailMarkdown(task)}
+      metadata={
+        <Detail.Metadata>
+          <Detail.Metadata.Label title="Title" text={task.title} />
+          <Detail.Metadata.Label
+            title="Status"
+            text={task.status === "done" ? "Done" : "Open"}
+          />
+          <Detail.Metadata.Label title="Due" text={dueLabel(task)} />
+          <Detail.Metadata.Label title="Tags" text={tagsLabel(task)} />
+          <Detail.Metadata.Separator />
+          <Detail.Metadata.Label title="Task ID" text={task.id} />
+        </Detail.Metadata>
+      }
+      actions={
+        <ActionPanel>
+          {task.status === "open" ? (
+            <Action
+              title="Complete Task"
+              icon={Icon.Checkmark}
+              onAction={() => void handleComplete()}
+            />
+          ) : (
+            <Action
+              title="Mark as Incomplete"
+              icon={Icon.ArrowClockwise}
+              onAction={() => void handleReopen()}
+            />
+          )}
+          <Action
+            title="Refresh"
+            icon={Icon.ArrowClockwise}
+            onAction={() => void onRefresh()}
+            shortcut={{ modifiers: ["cmd"], key: "r" }}
+          />
+          <Action
+            title="Quick Add Task"
+            icon={Icon.Plus}
+            onAction={onQuickAdd}
+            shortcut={{ modifiers: ["cmd"], key: "n" }}
+          />
+          <Action.CopyToClipboard title="Copy Task ID" content={task.id} />
+        </ActionPanel>
+      }
+    />
+  );
 };
 
 export default function ManageTasksCommand() {
@@ -180,6 +260,25 @@ export default function ManageTasksCommand() {
     }
   };
 
+  const onReopenTask = async (task: TodoTask): Promise<void> => {
+    const toast = await showToast({
+      style: Toast.Style.Animated,
+      title: "Marking task as incomplete...",
+    });
+
+    try {
+      await reopenTask(task.id);
+      toast.style = Toast.Style.Success;
+      toast.title = "Task marked incomplete";
+      await loadTasks();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toast.style = Toast.Style.Failure;
+      toast.title = "Failed to update task";
+      toast.message = message;
+    }
+  };
+
   const commonActions = (
     <>
       <Action
@@ -197,11 +296,41 @@ export default function ManageTasksCommand() {
     </>
   );
 
-  const accessoryForTask = (task: TodoTask): List.Item.Accessory[] => {
+  const cycleOwnerScope = (): void => {
+    setOwnerScope((current) => {
+      if (current === "all") {
+        return "user";
+      }
+      if (current === "user") {
+        return "agent";
+      }
+      return "all";
+    });
+  };
+
+  const cycleTagFilter = (): void => {
+    const options: TagFilter[] = ["__all__", ...availableTags];
+    if (options.length <= 1) {
+      setTagFilter("__all__");
+      return;
+    }
+    const currentIndex = options.indexOf(tagFilter);
+    const nextIndex =
+      currentIndex >= 0 ? (currentIndex + 1) % options.length : 0;
+    setTagFilter(options[nextIndex] ?? "__all__");
+  };
+
+  const accessoryForTask = (
+    task: TodoTask,
+    options?: { includeDoneBadge?: boolean },
+  ): List.Item.Accessory[] => {
     const accessories: List.Item.Accessory[] = [{ text: dueLabel(task) }];
     const tags = Array.isArray(task.tags) ? task.tags : [];
     if (tags.length > 0) {
       accessories.unshift({ tag: tags.join(" · ") });
+    }
+    if (options?.includeDoneBadge) {
+      accessories.push({ icon: Icon.CheckCircle, text: "Done" });
     }
     return accessories;
   };
@@ -210,7 +339,7 @@ export default function ManageTasksCommand() {
     <List
       isLoading={isLoading}
       navigationTitle={ownerScopeTitle(ownerScope)}
-      searchBarPlaceholder="Search tasks, notes, and tags"
+      searchBarPlaceholder="Search tasks and tags"
       searchText={searchText}
       onSearchTextChange={setSearchText}
       searchBarAccessory={
@@ -232,18 +361,21 @@ export default function ManageTasksCommand() {
           icon={Icon.Person}
           actions={
             <ActionPanel>
-              <Action
-                title="Show All Tasks"
-                onAction={() => setOwnerScope("all")}
-              />
-              <Action
-                title="Show My Tasks"
-                onAction={() => setOwnerScope("user")}
-              />
-              <Action
-                title="Show Agent Tasks"
-                onAction={() => setOwnerScope("agent")}
-              />
+              <Action title="Cycle Owner Scope" onAction={cycleOwnerScope} />
+              <ActionPanel.Submenu title="Set Owner Scope" icon={Icon.Person}>
+                <Action
+                  title="Show All Tasks"
+                  onAction={() => setOwnerScope("all")}
+                />
+                <Action
+                  title="Show My Tasks"
+                  onAction={() => setOwnerScope("user")}
+                />
+                <Action
+                  title="Show Agent Tasks"
+                  onAction={() => setOwnerScope("agent")}
+                />
+              </ActionPanel.Submenu>
               {commonActions}
             </ActionPanel>
           }
@@ -254,17 +386,20 @@ export default function ManageTasksCommand() {
           icon={Icon.Tag}
           actions={
             <ActionPanel>
-              <Action
-                title="Use Any Tag"
-                onAction={() => setTagFilter("__all__")}
-              />
-              {availableTags.map((tag) => (
+              <Action title="Cycle Tag Filter" onAction={cycleTagFilter} />
+              <ActionPanel.Submenu title="Set Tag Filter" icon={Icon.Tag}>
                 <Action
-                  key={tag}
-                  title={`Filter by ${tag}`}
-                  onAction={() => setTagFilter(tag)}
+                  title="Use Any Tag"
+                  onAction={() => setTagFilter("__all__")}
                 />
-              ))}
+                {availableTags.map((tag) => (
+                  <Action
+                    key={tag}
+                    title={`Filter by ${tag}`}
+                    onAction={() => setTagFilter(tag)}
+                  />
+                ))}
+              </ActionPanel.Submenu>
               {commonActions}
             </ActionPanel>
           }
@@ -276,10 +411,22 @@ export default function ManageTasksCommand() {
           <List.Item
             key={task.id}
             title={task.title}
-            subtitle={subtitle(task)}
             accessories={accessoryForTask(task)}
             actions={
               <ActionPanel>
+                <Action.Push
+                  title="Open Task Details"
+                  icon={Icon.Document}
+                  target={
+                    <TaskDetailView
+                      task={task}
+                      onCompleteTask={onCompleteTask}
+                      onReopenTask={onReopenTask}
+                      onRefresh={loadTasks}
+                      onQuickAdd={() => push(<AddTaskCommand />)}
+                    />
+                  }
+                />
                 <Action
                   title="Complete Task"
                   icon={Icon.Checkmark}
@@ -301,10 +448,27 @@ export default function ManageTasksCommand() {
           <List.Item
             key={task.id}
             title={task.title}
-            subtitle={subtitle(task)}
-            accessories={[{ icon: Icon.CheckCircle, text: "Done" }]}
+            accessories={accessoryForTask(task, { includeDoneBadge: true })}
             actions={
               <ActionPanel>
+                <Action.Push
+                  title="Open Task Details"
+                  icon={Icon.Document}
+                  target={
+                    <TaskDetailView
+                      task={task}
+                      onCompleteTask={onCompleteTask}
+                      onReopenTask={onReopenTask}
+                      onRefresh={loadTasks}
+                      onQuickAdd={() => push(<AddTaskCommand />)}
+                    />
+                  }
+                />
+                <Action
+                  title="Mark as Incomplete"
+                  icon={Icon.ArrowClockwise}
+                  onAction={() => void onReopenTask(task)}
+                />
                 <Action.CopyToClipboard
                   title="Copy Task ID"
                   content={task.id}

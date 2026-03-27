@@ -23,6 +23,10 @@ interface CreateTaskInput {
   tags?: string[];
 }
 
+interface UpdateTaskInput {
+  status?: "open" | "done";
+}
+
 export type TaskStatus = "open" | "done" | "all";
 
 interface Preferences {
@@ -152,5 +156,14 @@ export const completeTask = async (taskId: string): Promise<TodoTask> => {
       method: "POST",
     },
   );
+  return normalizeTask(response.task);
+};
+
+export const reopenTask = async (taskId: string): Promise<TodoTask> => {
+  const encodedId = encodeURIComponent(taskId);
+  const response = await request<{ task: TodoTask }>(`/tasks/${encodedId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "open" } satisfies UpdateTaskInput),
+  });
   return normalizeTask(response.task);
 };
