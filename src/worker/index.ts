@@ -628,19 +628,23 @@ const loadTaskTagsByTaskId = async (
   }
 
   const db = dbForEnv(env);
-  const rows = await db
-    .select({ taskId: taskTags.taskId, tag: taskTags.tag })
-    .from(taskTags)
-    .where(inArray(taskTags.taskId, taskIds))
-    .orderBy(asc(taskTags.taskId), asc(taskTags.tag));
+  const TASK_ID_CHUNK_SIZE = 200;
+  for (let index = 0; index < taskIds.length; index += TASK_ID_CHUNK_SIZE) {
+    const chunk = taskIds.slice(index, index + TASK_ID_CHUNK_SIZE);
+    const rows = await db
+      .select({ taskId: taskTags.taskId, tag: taskTags.tag })
+      .from(taskTags)
+      .where(inArray(taskTags.taskId, chunk))
+      .orderBy(asc(taskTags.taskId), asc(taskTags.tag));
 
-  for (const row of rows) {
-    const existing = tagsByTaskId.get(row.taskId);
-    if (existing) {
-      existing.push(row.tag);
-      continue;
+    for (const row of rows) {
+      const existing = tagsByTaskId.get(row.taskId);
+      if (existing) {
+        existing.push(row.tag);
+        continue;
+      }
+      tagsByTaskId.set(row.taskId, [row.tag]);
     }
-    tagsByTaskId.set(row.taskId, [row.tag]);
   }
 
   return tagsByTaskId;
