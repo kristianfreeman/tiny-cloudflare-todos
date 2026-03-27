@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import {
+  ChartBar,
   CaretDown,
   CaretRight,
   CheckCircle,
@@ -20,6 +21,8 @@ interface Task {
   tags: string[];
   dueDate: string | null;
   status: "open" | "done";
+  createdAt: string;
+  completedAt: string | null;
 }
 
 interface TasksResponse {
@@ -29,6 +32,13 @@ interface TasksResponse {
 interface TaskGroup {
   tag: string;
   tasks: Task[];
+}
+
+interface DailyMetricsPoint {
+  date: string;
+  label: string;
+  created: number;
+  completed: number;
 }
 
 type Page = "tasks" | "user";
@@ -80,6 +90,70 @@ const groupTasksByTag = (tasks: Task[]): TaskGroup[] => {
     .map(([tag, groupedTasks]) => ({ tag, tasks: groupedTasks }));
 };
 
+const toIsoDay = (value: string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const quickMatch = value.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (quickMatch) {
+    return quickMatch[1];
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return date.toISOString().slice(0, 10);
+};
+
+const dayLabel = (isoDay: string): string => {
+  const parsed = new Date(`${isoDay}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) {
+    return isoDay;
+  }
+  return parsed.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+};
+
+const buildDailyMetrics = (tasks: Task[], days: number): DailyMetricsPoint[] => {
+  const createdByDate = new Map<string, number>();
+  const completedByDate = new Map<string, number>();
+  const now = new Date();
+  now.setUTCHours(0, 0, 0, 0);
+
+  const points: DailyMetricsPoint[] = [];
+  for (let offset = days - 1; offset >= 0; offset -= 1) {
+    const date = new Date(now);
+    date.setUTCDate(now.getUTCDate() - offset);
+    const isoDay = date.toISOString().slice(0, 10);
+    points.push({
+      date: isoDay,
+      label: dayLabel(isoDay),
+      created: 0,
+      completed: 0
+    });
+  }
+
+  const chartDates = new Set(points.map((point) => point.date));
+
+  for (const task of tasks) {
+    const createdDay = toIsoDay(task.createdAt);
+    if (createdDay && chartDates.has(createdDay)) {
+      createdByDate.set(createdDay, (createdByDate.get(createdDay) ?? 0) + 1);
+    }
+
+    const completedDay = toIsoDay(task.completedAt);
+    if (completedDay && chartDates.has(completedDay)) {
+      completedByDate.set(completedDay, (completedByDate.get(completedDay) ?? 0) + 1);
+    }
+  }
+
+  return points.map((point) => ({
+    ...point,
+    created: createdByDate.get(point.date) ?? 0,
+    completed: completedByDate.get(point.date) ?? 0
+  }));
+};
+
 export function App() {
   const [sessionChecked, setSessionChecked] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
@@ -100,6 +174,12 @@ export function App() {
   const doneTasks = useMemo(() => tasks.filter((task) => task.status === "done"), [tasks]);
   const openGroups = useMemo(() => groupTasksByTag(openTasks), [openTasks]);
   const doneGroups = useMemo(() => groupTasksByTag(doneTasks), [doneTasks]);
+  const analyticsDays = 14;
+  const dailyMetrics = useMemo(() => buildDailyMetrics(tasks, analyticsDays), [tasks]);
+  const maxDailyMetric = useMemo(
+    () => Math.max(1, ...dailyMetrics.map((point) => Math.max(point.created, point.completed))),
+    [dailyMetrics]
+  );
 
   const loadSession = async (): Promise<void> => {
     const response = await fetch("/ui/session", { method: "GET" });
@@ -363,6 +443,46 @@ export function App() {
             {loadingTasks ? <span className="task-meta">Loading...</span> : null}
           </div>
           {taskError ? <p className="error-text">{taskError}</p> : null}
+
+          <section className="analytics-card">
+            <header className="section-head analytics-head">
+              <h2>
+                <ChartBar size={18} weight="fill" /> Analytics ({analyticsDays} days)
+              </h2>
+              <div className="analytics-legend">
+                <span className="legend-item">
+                  <span className="legend-swatch legend-created" /> Created
+                </span>
+                <span className="legend-item">
+                  <span className="legend-swatch legend-completed" /> Completed
+                </span>
+              </div>
+            </header>
+            <div className="chart-grid" role="img" aria-label="Daily created and completed todos">
+              {dailyMetrics.map((point) => {
+                const createdHeight = `${Math.round((point.created / maxDailyMetric) * 100)}%`;
+                const completedHeight = `${Math.round((point.completed / maxDailyMetric) * 100)}%`;
+                return (
+                  <div className="chart-day" key={point.date}>
+                    <div className="chart-bars">
+                      <span
+                        className="chart-bar chart-bar-created"
+                        style={{ height: createdHeight }}
+                        title={`${point.label}: ${point.created} created`}
+                      />
+                      <span
+                        className="chart-bar chart-bar-completed"
+                        style={{ height: completedHeight }}
+                        title={`${point.label}: ${point.completed} completed`}
+                      />
+                    </div>
+                    <span className="chart-label">{point.label}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
           <div className="tag-grid">
             {openGroups.map((group) => (
               <section className="tag-group" key={`open-${group.tag}`}>
