@@ -373,9 +373,22 @@ describe("worker integration", () => {
       "viewer-token"
     );
     expect(viewerListsTasks.status).toBe(200);
-    const viewerTasksBody = await readJson<{ tasks: Array<{ id: string }> }>(viewerListsTasks);
+    const viewerTasksBody = await readJson<{ tasks: Array<{ id: string; tags: string[] }> }>(viewerListsTasks);
     expect(viewerTasksBody.tasks).toHaveLength(1);
     expect(viewerTasksBody.tasks[0]?.id).toBe(editorTaskBody.task.id);
+    expect(viewerTasksBody.tasks[0]?.tags).toEqual(["owner:user", "project:todos"]);
+
+    const viewerTagFilteredTasks = await apiRequest(
+      context,
+      `/tasks?status=all&listId=${createListBody.list.id}&tag=project:todos`,
+      { method: "GET" },
+      "valid",
+      "viewer-token"
+    );
+    expect(viewerTagFilteredTasks.status).toBe(200);
+    const viewerTagFilteredBody = await readJson<{ tasks: Array<{ id: string }> }>(viewerTagFilteredTasks);
+    expect(viewerTagFilteredBody.tasks).toHaveLength(1);
+    expect(viewerTagFilteredBody.tasks[0]?.id).toBe(editorTaskBody.task.id);
 
     const viewerCannotCompleteTask = await apiRequest(
       context,

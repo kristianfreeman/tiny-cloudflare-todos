@@ -989,7 +989,6 @@ const listTasks = async (request: Request, env: Env, auth: AuthContext): Promise
         SELECT 1
         FROM ${taskTags}
         WHERE ${taskTags.taskId} = ${tasks.id}
-          AND ${taskTags.userId} = ${auth.userId}
           AND lower(${taskTags.tag}) IN (${sql.join(
           tagFilter.map((tag) => sql`${tag}`),
           sql`, `
@@ -1019,22 +1018,10 @@ const listTasks = async (request: Request, env: Env, auth: AuthContext): Promise
     .limit(safeLimit)
     .offset(safeOffset);
 
-  const tagRows = await db
-    .select({ taskId: taskTags.taskId, tag: taskTags.tag })
-    .from(taskTags)
-    .innerJoin(tasks, eq(tasks.id, taskTags.taskId))
-    .where(and(eq(taskTags.userId, auth.userId), inArray(tasks.listId, allowedListIds)))
-    .orderBy(asc(taskTags.taskId), asc(taskTags.tag));
-
-  const tagsByTaskId = new Map<string, string[]>();
-  for (const row of tagRows) {
-    const existing = tagsByTaskId.get(row.taskId);
-    if (existing) {
-      existing.push(row.tag);
-      continue;
-    }
-    tagsByTaskId.set(row.taskId, [row.tag]);
-  }
+  const tagsByTaskId = await loadTaskTagsByTaskId(
+    env,
+    rows.map((row) => row.id)
+  );
 
   return json({ tasks: rows.map((row) => mapTask(row, tagsByTaskId.get(row.id) ?? [])) } satisfies ListTasksResponse);
 };
