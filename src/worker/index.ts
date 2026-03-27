@@ -628,7 +628,7 @@ const loadTaskTagsByTaskId = async (
   }
 
   const db = dbForEnv(env);
-  const TASK_ID_CHUNK_SIZE = 200;
+  const TASK_ID_CHUNK_SIZE = 100;
   for (let index = 0; index < taskIds.length; index += TASK_ID_CHUNK_SIZE) {
     const chunk = taskIds.slice(index, index + TASK_ID_CHUNK_SIZE);
     const rows = await db
