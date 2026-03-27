@@ -1074,16 +1074,46 @@ const analyticsOverview = async (request: Request, env: Env, auth: AuthContext):
     });
   }
 
-  const rows = await db
-    .select()
-    .from(tasks)
-    .where(inArray(tasks.listId, allowedListIds))
-    .orderBy(asc(tasks.createdAt), asc(tasks.id));
+  const LIST_ID_CHUNK_SIZE = 200;
+  const listIdChunks: string[][] = [];
+  for (let index = 0; index < allowedListIds.length; index += LIST_ID_CHUNK_SIZE) {
+    listIdChunks.push(allowedListIds.slice(index, index + LIST_ID_CHUNK_SIZE));
+  }
 
-  const tagsByTaskId = await loadTaskTagsByTaskId(
-    env,
-    rows.map((row) => row.id)
-  );
+  const rows: Array<typeof tasks.$inferSelect> = [];
+  for (const chunk of listIdChunks) {
+    const chunkRows = await db
+      .select()
+      .from(tasks)
+      .where(inArray(tasks.listId, chunk));
+    rows.push(...chunkRows);
+  }
+  rows.sort((left, right) => {
+    const createdAtDiff = left.createdAt.localeCompare(right.createdAt);
+    if (createdAtDiff !== 0) {
+      return createdAtDiff;
+    }
+    return left.id.localeCompare(right.id);
+  });
+
+  const tagsByTaskId = new Map<string, string[]>();
+  for (const chunk of listIdChunks) {
+    const tagRows = await db
+      .select({ taskId: taskTags.taskId, tag: taskTags.tag })
+      .from(taskTags)
+      .innerJoin(tasks, eq(tasks.id, taskTags.taskId))
+      .where(and(eq(taskTags.userId, auth.userId), inArray(tasks.listId, chunk)))
+      .orderBy(asc(taskTags.taskId), asc(taskTags.tag));
+
+    for (const row of tagRows) {
+      const existing = tagsByTaskId.get(row.taskId);
+      if (existing) {
+        existing.push(row.tag);
+        continue;
+      }
+      tagsByTaskId.set(row.taskId, [row.tag]);
+    }
+  }
 
   const daily = new Map<string, { date: string; created: number; completed: number }>();
   for (let offset = days - 1; offset >= 0; offset -= 1) {
