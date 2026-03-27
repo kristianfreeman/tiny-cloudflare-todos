@@ -427,6 +427,66 @@ describe("worker integration", () => {
     expect(projectTagBody.tasks).toHaveLength(2);
   });
 
+  it("returns analytics overview payload with agent-friendly metrics", async () => {
+    const context = await newContext();
+
+    await createTask(context, {
+      title: "Stale open task",
+      dueDate: "2000-01-01",
+      tags: ["owner:user", "project:todos"]
+    });
+    const doneTask = await createTask(context, {
+      title: "Done task",
+      dueDate: "2099-01-01",
+      tags: ["owner:user", "project:todos"]
+    });
+    const completeResponse = await apiRequest(context, `/tasks/${encodeURIComponent(doneTask.id)}/complete`, { method: "POST" });
+    expect(completeResponse.status).toBe(200);
+
+    const response = await apiRequest(context, "/analytics/overview?days=30", { method: "GET" });
+    expect(response.status).toBe(200);
+    const body = await readJson<{
+      analytics: {
+        window: { days: number };
+        totals: {
+          tasksVisible: number;
+          openNow: number;
+          doneNow: number;
+          overdueOpen: number;
+          createdInWindow: number;
+          completedInWindow: number;
+          completionRateInWindow: number;
+        };
+        daily: Array<{ date: string; created: number; completed: number }>;
+        breakdowns: {
+          owner: Array<{ owner: string; createdInWindow: number; completedInWindow: number }>;
+          project: Array<{ projectTag: string; createdInWindow: number; completedInWindow: number }>;
+        };
+        guidance: { definitions: Record<string, string>; interpretationHints: string[] };
+      };
+    }>(response);
+
+    expect(body.analytics.window.days).toBe(30);
+    expect(body.analytics.totals.tasksVisible).toBe(2);
+    expect(body.analytics.totals.openNow).toBe(1);
+    expect(body.analytics.totals.doneNow).toBe(1);
+    expect(body.analytics.totals.overdueOpen).toBe(1);
+    expect(body.analytics.totals.createdInWindow).toBe(2);
+    expect(body.analytics.totals.completedInWindow).toBe(1);
+    expect(body.analytics.totals.completionRateInWindow).toBe(0.5);
+    expect(body.analytics.daily.some((point) => point.created > 0 || point.completed > 0)).toBe(true);
+    expect(body.analytics.breakdowns.owner).toEqual(
+      expect.arrayContaining([expect.objectContaining({ owner: "owner:user", createdInWindow: 2, completedInWindow: 1 })])
+    );
+    expect(body.analytics.breakdowns.project).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ projectTag: "project:todos", createdInWindow: 2, completedInWindow: 1 })
+      ])
+    );
+    expect((body.analytics.guidance.definitions.tasksVisible ?? "").length).toBeGreaterThan(0);
+    expect(body.analytics.guidance.interpretationHints.length).toBeGreaterThan(0);
+  });
+
   it("requires owner and project tags on task creation", async () => {
     const context = await newContext();
 

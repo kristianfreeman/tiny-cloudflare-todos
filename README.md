@@ -165,6 +165,7 @@ SHA-256 hashed and looked up in `api_tokens.token_hash`; requests run with that 
 - `GET /health`
 - `POST /tasks`
 - `GET /tasks?status=open|done|all&limit=100&offset=0&listId=<optional-list-id>&search=&due-before=&due-after=&sort=&tag=`
+- `GET /analytics/overview?days=30&listId=<optional-list-id>`
 - `PATCH /tasks/:taskId`
 - `POST /tasks/:taskId/complete`
 - `DELETE /tasks/:taskId`
@@ -197,6 +198,19 @@ SHA-256 hashed and looked up in `api_tokens.token_hash`; requests run with that 
 - `listId` / `list_id` (optional): exact match by task `listId`.
 - `sort` (optional): `default`, `due_date_asc`, `due_date_desc`, `created_at_asc`, `created_at_desc`.
 - `tag` (optional): comma-delimited or repeated tag filter (for example `tag=owner:user` or `tag=owner:user,project:todos`).
+
+### `GET /analytics/overview` query options
+
+- `days` (optional): lookback window, defaults to `30`, clamped to `1..365`.
+- `listId` / `list_id` (optional): scope analytics to a readable list.
+
+Response includes agent-friendly sections:
+
+- `window`: explicit date bounds used for calculations.
+- `totals`: backlog/throughput summary (`openNow`, `overdueOpen`, `createdInWindow`, `completedInWindow`, `completionRateInWindow`).
+- `daily`: per-day created/completed counts for charting.
+- `breakdowns`: owner and project slices for routing work.
+- `guidance`: metric definitions and interpretation hints for automation agents.
 
 `default` sort preserves the original ordering semantics:
 

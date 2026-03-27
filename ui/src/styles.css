@@ -50,6 +50,10 @@ body {
   gap: 0.8rem;
 }
 
+.analytics-page {
+  gap: 0.8rem;
+}
+
 .auth-card {
   max-width: 460px;
   width: 100%;
@@ -109,6 +113,31 @@ body {
   align-items: center;
 }
 
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.45rem;
+}
+
+.metric-card {
+  border: 1px solid #dbe6f4;
+  border-radius: 10px;
+  background: #fff;
+  padding: 0.55rem;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.metric-label {
+  font-size: 0.76rem;
+  color: #607286;
+}
+
+.metric-value {
+  font-size: 1.15rem;
+  color: #21344b;
+}
+
 .analytics-legend {
   display: inline-flex;
   gap: 0.65rem;
@@ -140,7 +169,8 @@ body {
 
 .chart-grid {
   display: grid;
-  grid-template-columns: repeat(14, minmax(24px, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(24px, 1fr);
   gap: 0.35rem;
   align-items: end;
   min-height: 180px;
@@ -186,6 +216,35 @@ body {
   font-size: 0.7rem;
   color: #5d6e81;
   white-space: nowrap;
+}
+
+.breakdown-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0.55rem;
+}
+
+.breakdown-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.breakdown-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  color: #334a63;
+  border-top: 1px solid #deebf8;
+  padding-top: 0.35rem;
+}
+
+.breakdown-list li:first-child {
+  border-top: 0;
+  padding-top: 0;
 }
 
 .section-head {
@@ -282,7 +341,11 @@ body {
   }
 
   .chart-grid {
-    grid-template-columns: repeat(14, minmax(30px, 1fr));
+    grid-auto-columns: minmax(30px, 1fr);
+  }
+
+  .breakdown-list li {
+    flex-direction: column;
   }
 
   .task-item-actions {

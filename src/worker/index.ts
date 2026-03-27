@@ -119,6 +119,21 @@ const toDate = (value: string): Date => new Date(`${value}T00:00:00Z`);
 
 const dateToIso = (date: Date): string => date.toISOString().slice(0, 10);
 
+const timestampToIsoDate = (value: string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const quickMatch = value.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (quickMatch) {
+    return quickMatch[1] ?? null;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  return parsed.toISOString().slice(0, 10);
+};
+
 const addDays = (value: string, amount: number): string => {
   const date = toDate(value);
   date.setUTCDate(date.getUTCDate() + amount);
@@ -983,6 +998,218 @@ const listTasks = async (request: Request, env: Env, auth: AuthContext): Promise
   return json({ tasks: rows.map((row) => mapTask(row, tagsByTaskId.get(row.id) ?? [])) } satisfies ListTasksResponse);
 };
 
+const analyticsOverview = async (request: Request, env: Env, auth: AuthContext): Promise<Response> => {
+  const db = dbForEnv(env);
+  const url = new URL(request.url);
+  const daysRaw = Number(url.searchParams.get("days") ?? "30");
+  const listIdParam = url.searchParams.get("listId") ?? url.searchParams.get("list_id");
+  const listId = listIdParam?.trim() ?? null;
+
+  if (listId !== null && !listId) {
+    return error("list_id cannot be empty", 422);
+  }
+
+  const days = Number.isFinite(daysRaw) ? Math.max(1, Math.min(365, Math.floor(daysRaw))) : 30;
+  const endDate = todayIsoInTimezone("UTC");
+  const startDate = addDays(endDate, -(days - 1));
+
+  let allowedListIds: string[];
+  if (listId) {
+    const roleResult = await requireListRole(env, auth, listId, "viewer");
+    if (roleResult instanceof Response) {
+      return roleResult;
+    }
+    allowedListIds = [listId];
+  } else {
+    allowedListIds = await listIdsForMember(env, auth.userId, "viewer");
+  }
+
+  if (allowedListIds.length === 0) {
+    return json({
+      analytics: {
+        schemaVersion: "2026-03-27",
+        generatedAt: new Date().toISOString(),
+        window: { days, startDate, endDate },
+        totals: {
+          tasksVisible: 0,
+          openNow: 0,
+          doneNow: 0,
+          overdueOpen: 0,
+          createdInWindow: 0,
+          completedInWindow: 0,
+          completionRateInWindow: 0
+        },
+        daily: [],
+        breakdowns: {
+          owner: [],
+          project: []
+        },
+        guidance: {
+          definitions: {
+            createdInWindow: `Tasks with createdAt between ${startDate} and ${endDate}, inclusive.`,
+            completedInWindow: `Tasks with completedAt between ${startDate} and ${endDate}, inclusive.`,
+            completionRateInWindow: "completedInWindow / createdInWindow; returns 0 when createdInWindow is 0.",
+            overdueOpen: "Open tasks where dueDate is before today (UTC).",
+            tasksVisible: "All tasks the caller can read after list membership filtering."
+          },
+          interpretationHints: [
+            "If createdInWindow consistently exceeds completedInWindow, backlog likely grows.",
+            "If overdueOpen rises, prioritize aging and due-date hygiene.",
+            "Owner and project breakdowns help route work and rebalance throughput."
+          ]
+        }
+      }
+    });
+  }
+
+  const rows = await db
+    .select()
+    .from(tasks)
+    .where(inArray(tasks.listId, allowedListIds))
+    .orderBy(asc(tasks.createdAt), asc(tasks.id));
+
+  const tagsByTaskId = await loadTaskTagsByTaskId(
+    env,
+    rows.map((row) => row.id)
+  );
+
+  const daily = new Map<string, { date: string; created: number; completed: number }>();
+  for (let offset = days - 1; offset >= 0; offset -= 1) {
+    const date = addDays(endDate, -offset);
+    daily.set(date, { date, created: 0, completed: 0 });
+  }
+
+  const ownerBreakdown = new Map<string, { owner: string; openNow: number; createdInWindow: number; completedInWindow: number }>();
+  const projectBreakdown = new Map<
+    string,
+    { projectTag: string; openNow: number; createdInWindow: number; completedInWindow: number }
+  >();
+
+  let openNow = 0;
+  let doneNow = 0;
+  let overdueOpen = 0;
+  let createdInWindow = 0;
+  let completedInWindow = 0;
+
+  for (const row of rows) {
+    const createdDay = timestampToIsoDate(row.createdAt);
+    const completedDay = timestampToIsoDate(row.completedAt);
+    const tags = tagsByTaskId.get(row.id) ?? [];
+
+    const ownerTag = tags.find((tag) => tag === "owner:user" || tag === "owner:agent") ?? "owner:unknown";
+    const ownerEntry = ownerBreakdown.get(ownerTag) ?? {
+      owner: ownerTag,
+      openNow: 0,
+      createdInWindow: 0,
+      completedInWindow: 0
+    };
+
+    const projectTags = tags.filter((tag) => tag.startsWith("project:"));
+    const normalizedProjectTags = projectTags.length > 0 ? projectTags : ["project:unknown"];
+
+    if (row.status === "open") {
+      openNow += 1;
+      ownerEntry.openNow += 1;
+      for (const projectTag of normalizedProjectTags) {
+        const projectEntry = projectBreakdown.get(projectTag) ?? {
+          projectTag,
+          openNow: 0,
+          createdInWindow: 0,
+          completedInWindow: 0
+        };
+        projectEntry.openNow += 1;
+        projectBreakdown.set(projectTag, projectEntry);
+      }
+      if (row.dueDate && row.dueDate < endDate) {
+        overdueOpen += 1;
+      }
+    }
+
+    if (row.status === "done") {
+      doneNow += 1;
+    }
+
+    if (createdDay && createdDay >= startDate && createdDay <= endDate) {
+      createdInWindow += 1;
+      ownerEntry.createdInWindow += 1;
+      const point = daily.get(createdDay);
+      if (point) {
+        point.created += 1;
+      }
+      for (const projectTag of normalizedProjectTags) {
+        const projectEntry = projectBreakdown.get(projectTag) ?? {
+          projectTag,
+          openNow: 0,
+          createdInWindow: 0,
+          completedInWindow: 0
+        };
+        projectEntry.createdInWindow += 1;
+        projectBreakdown.set(projectTag, projectEntry);
+      }
+    }
+
+    if (completedDay && completedDay >= startDate && completedDay <= endDate) {
+      completedInWindow += 1;
+      ownerEntry.completedInWindow += 1;
+      const point = daily.get(completedDay);
+      if (point) {
+        point.completed += 1;
+      }
+      for (const projectTag of normalizedProjectTags) {
+        const projectEntry = projectBreakdown.get(projectTag) ?? {
+          projectTag,
+          openNow: 0,
+          createdInWindow: 0,
+          completedInWindow: 0
+        };
+        projectEntry.completedInWindow += 1;
+        projectBreakdown.set(projectTag, projectEntry);
+      }
+    }
+
+    ownerBreakdown.set(ownerTag, ownerEntry);
+  }
+
+  const completionRateInWindow =
+    createdInWindow > 0 ? Number((completedInWindow / createdInWindow).toFixed(3)) : 0;
+
+  return json({
+    analytics: {
+      schemaVersion: "2026-03-27",
+      generatedAt: new Date().toISOString(),
+      window: { days, startDate, endDate },
+      totals: {
+        tasksVisible: rows.length,
+        openNow,
+        doneNow,
+        overdueOpen,
+        createdInWindow,
+        completedInWindow,
+        completionRateInWindow
+      },
+      daily: [...daily.values()],
+      breakdowns: {
+        owner: [...ownerBreakdown.values()].sort((left, right) => left.owner.localeCompare(right.owner)),
+        project: [...projectBreakdown.values()].sort((left, right) => left.projectTag.localeCompare(right.projectTag))
+      },
+      guidance: {
+        definitions: {
+          createdInWindow: `Tasks with createdAt between ${startDate} and ${endDate}, inclusive.`,
+          completedInWindow: `Tasks with completedAt between ${startDate} and ${endDate}, inclusive.`,
+          completionRateInWindow: "completedInWindow / createdInWindow; returns 0 when createdInWindow is 0.",
+          overdueOpen: "Open tasks where dueDate is before today (UTC).",
+          tasksVisible: "All tasks the caller can read after list membership filtering."
+        },
+        interpretationHints: [
+          "If createdInWindow consistently exceeds completedInWindow, backlog likely grows.",
+          "If overdueOpen rises, prioritize aging and due-date hygiene.",
+          "Owner and project breakdowns help route work and rebalance throughput."
+        ]
+      }
+    }
+  });
+};
+
 const updateTask = async (
   request: Request,
   env: Env,
@@ -1655,6 +1882,9 @@ const handleApiFetch = async (request: Request, env: Env, requestContext: Reques
   }
   if (pathname === "/tasks" && request.method === "GET") {
     return withRequestIdHeader(await listTasks(request, env, auth), requestContext.requestId);
+  }
+  if (pathname === "/analytics/overview" && request.method === "GET") {
+    return withRequestIdHeader(await analyticsOverview(request, env, auth), requestContext.requestId);
   }
 
   const taskRoute = routeTaskId(pathname);
