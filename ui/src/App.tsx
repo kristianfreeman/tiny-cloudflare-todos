@@ -5,14 +5,16 @@ import {
   CaretRight,
   CheckCircle,
   Circle,
+  ClipboardText,
+  Moon,
   Robot,
   SignOut,
+  Sun,
   Tag,
   Trash,
   User,
   UserCircle
 } from "@phosphor-icons/react";
-import { Badge, Button, ClipboardText, Input, SensitiveInput, Tabs } from "@cloudflare/kumo";
 
 interface Task {
   id: string;
@@ -82,6 +84,26 @@ interface AnalyticsResponse {
 
 type Page = "tasks" | "analytics" | "user";
 
+const pathForPage = (page: Page): string => {
+  if (page === "analytics") {
+    return "/analytics";
+  }
+  if (page === "user") {
+    return "/user";
+  }
+  return "/";
+};
+
+const pageForPath = (pathname: string): Page => {
+  if (pathname === "/analytics") {
+    return "analytics";
+  }
+  if (pathname === "/user") {
+    return "user";
+  }
+  return "tasks";
+};
+
 const readError = async (response: Response): Promise<string> => {
   const fallback = `Request failed (${response.status})`;
   try {
@@ -96,10 +118,9 @@ const groupTasksByTag = (tasks: Task[]): TaskGroup[] => {
   const grouped = new Map<string, Task[]>();
   for (const task of tasks) {
     const tags = task.tags.filter((tag) => !tag.startsWith("owner:"));
-    const projectTags = tags.filter((tag) => tag.startsWith("project:"));
-    const groupingTags = projectTags.length > 0 ? tags : [...tags, "project:unknown"];
+    const groupingTags = tags.length > 0 ? tags : ["untagged"];
     for (const tag of groupingTags) {
-      const key = tag.trim() || "project:unknown";
+      const key = tag.trim() || "untagged";
       const existing = grouped.get(key);
       if (existing) {
         existing.push(task);
@@ -112,6 +133,9 @@ const groupTasksByTag = (tasks: Task[]): TaskGroup[] => {
   const tagRank = (tag: string): number => {
     if (tag.startsWith("project:")) {
       return 0;
+    }
+    if (tag === "untagged") {
+      return 2;
     }
     return 1;
   };
@@ -138,6 +162,7 @@ const dayLabel = (isoDay: string): string => {
 const browserTimeZone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
 export function App() {
+  const initialPage = typeof window === "undefined" ? "tasks" : pageForPath(window.location.pathname);
   const [sessionChecked, setSessionChecked] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
   const [password, setPassword] = useState("");
@@ -148,13 +173,15 @@ export function App() {
   const [taskTags, setTaskTags] = useState("");
   const [taskDueDate, setTaskDueDate] = useState("");
   const [taskError, setTaskError] = useState<string | null>(null);
-  const [activePage, setActivePage] = useState<Page>("tasks");
+  const [activePage, setActivePage] = useState<Page>(initialPage);
   const [token, setToken] = useState<string | null>(null);
   const [loadingTasks, setLoadingTasks] = useState(false);
   const [showClosed, setShowClosed] = useState(false);
   const [analytics, setAnalytics] = useState<AnalyticsResponse["analytics"] | null>(null);
   const [analyticsError, setAnalyticsError] = useState<string | null>(null);
   const [loadingAnalytics, setLoadingAnalytics] = useState(false);
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [copiedToken, setCopiedToken] = useState(false);
 
   const openTasks = useMemo(() => tasks.filter((task) => task.status === "open"), [tasks]);
   const doneTasks = useMemo(() => tasks.filter((task) => task.status === "done"), [tasks]);
@@ -236,6 +263,26 @@ export function App() {
   };
 
   useEffect(() => {
+    const savedTheme = window.localStorage.getItem("tiny-todo-theme");
+    if (savedTheme === "light" || savedTheme === "dark") {
+      setTheme(savedTheme);
+    }
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    window.localStorage.setItem("tiny-todo-theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
+    const onPopState = (): void => {
+      setActivePage(pageForPath(window.location.pathname));
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  useEffect(() => {
     void loadSession();
   }, []);
 
@@ -270,6 +317,7 @@ export function App() {
     setAnalyticsError(null);
     setTasks([]);
     setAnalytics(null);
+    setCopiedToken(false);
   };
 
   const createTask = async (): Promise<void> => {
@@ -349,15 +397,33 @@ export function App() {
     return null;
   };
 
+  const copyToken = async (): Promise<void> => {
+    if (!token) {
+      return;
+    }
+    await navigator.clipboard.writeText(token);
+    setCopiedToken(true);
+    setTimeout(() => setCopiedToken(false), 1200);
+  };
+
+  const navigateToPage = (page: Page): void => {
+    setActivePage(page);
+    const nextPath = pathForPage(page);
+    if (window.location.pathname !== nextPath) {
+      window.history.pushState({ page }, "", nextPath);
+    }
+  };
+
   const renderTaskRow = (task: Task) => {
     const owner = ownerOfTask(task);
     const ownerTitle = owner === "agent" ? "Agent-owned" : owner === "user" ? "User-owned" : "Unknown owner";
     return (
       <li className="task-item" key={task.id}>
         <span className="owner-icon" title={ownerTitle}>
-          {owner === "agent" ? <Robot size={16} weight="fill" /> : <User size={16} weight="fill" />}
+          {owner === "agent" ? <Robot size={14} weight="fill" /> : <User size={14} weight="fill" />}
         </span>
-        <Input
+        <input
+          className="text-input"
           defaultValue={task.title}
           disabled={task.status === "done"}
           onBlur={(event: ChangeEvent<HTMLInputElement>) => void updateTaskTitle(task, event.currentTarget.value)}
@@ -365,15 +431,15 @@ export function App() {
         <span className="task-meta">{task.dueDate ?? "No due date"}</span>
         <div className="task-item-actions">
           {task.status === "open" ? (
-            <Button onClick={() => void completeTask(task.id)}>
-              <CheckCircle size={16} weight="bold" />
+            <button className="btn" onClick={() => void completeTask(task.id)}>
+              <CheckCircle size={14} weight="bold" />
               Complete
-            </Button>
+            </button>
           ) : null}
-          <Button onClick={() => void deleteTask(task.id)}>
-            <Trash size={16} weight="bold" />
+          <button className="btn btn-danger" onClick={() => void deleteTask(task.id)}>
+            <Trash size={14} weight="bold" />
             Delete
-          </Button>
+          </button>
         </div>
       </li>
     );
@@ -386,16 +452,24 @@ export function App() {
   if (!authenticated) {
     return (
       <main className="app-shell app-auth-shell">
-        <section className="card auth-card">
+        <section className="panel auth-panel">
           <h1 className="title">Tiny Todo Web</h1>
           <div className="auth-form">
-            <Input
+            <input
+              className="text-input"
               type="password"
               value={password}
               placeholder="UI password"
               onChange={(event: ChangeEvent<HTMLInputElement>) => setPassword(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  void login();
+                }
+              }}
             />
-            <Button onClick={() => void login()}>Unlock</Button>
+            <button className="btn" onClick={() => void login()}>
+              Unlock
+            </button>
           </div>
           {passwordError ? <p className="error-text">{passwordError}</p> : null}
         </section>
@@ -405,225 +479,253 @@ export function App() {
 
   return (
     <main className="app-shell">
-      <section className="card">
-        <h1 className="title">Tiny Todo Dashboard</h1>
-        <div className="badge-row">
-          <Badge>
-            <Circle size={14} weight="fill" />
-            {openTasks.length} open
-          </Badge>
-          <Badge>
-            <CheckCircle size={14} weight="fill" />
-            {doneTasks.length} closed
-          </Badge>
-        </div>
-        <div className="top-controls">
-          <Tabs
-            tabs={[
-              { value: "tasks", label: "Tasks" },
-              { value: "analytics", label: "Analytics" },
-              { value: "user", label: "User" }
-            ]}
-            value={activePage}
-            onValueChange={(value) => setActivePage(value as Page)}
-          />
-          <Button onClick={() => void logout()}>
-            <SignOut size={16} weight="bold" />
-            Logout
-          </Button>
-        </div>
-      </section>
+      <div className="app-layout">
+        <aside className="page-nav" aria-label="Pages">
+          <button className={`page-button${activePage === "tasks" ? " is-active" : ""}`} onClick={() => navigateToPage("tasks")}>
+            Tasks
+          </button>
+          <button
+            className={`page-button${activePage === "analytics" ? " is-active" : ""}`}
+            onClick={() => navigateToPage("analytics")}
+          >
+            Analytics
+          </button>
+          <button className={`page-button${activePage === "user" ? " is-active" : ""}`} onClick={() => navigateToPage("user")}>
+            User
+          </button>
+        </aside>
 
-      {activePage === "tasks" ? (
-        <section className="card tasks-panel">
-          <h2>Create task</h2>
-          <div className="task-create-grid">
-            <Input
-              placeholder="Task title"
-              value={taskTitle}
-              onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskTitle(event.currentTarget.value)}
-            />
-            <Input
-              placeholder="Task note"
-              value={taskNote}
-              onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskNote(event.currentTarget.value)}
-            />
-            <Input
-              placeholder="tags (comma separated)"
-              value={taskTags}
-              onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskTags(event.currentTarget.value)}
-            />
-            <Input
-              type="date"
-              value={taskDueDate}
-              onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskDueDate(event.currentTarget.value)}
-            />
-            <Button onClick={() => void createTask()}>Add task</Button>
-          </div>
-
-          <div className="section-head">
-            <h2>Open</h2>
-            {loadingTasks ? <span className="task-meta">Loading...</span> : null}
-          </div>
-          {taskError ? <p className="error-text">{taskError}</p> : null}
-
-          <div className="tag-grid">
-            {openGroups.map((group) => (
-              <section className="tag-group" key={`open-${group.tag}`}>
-                <header className="tag-head">
-                  <span className="tag-label">
-                    <Tag size={14} weight="bold" />
-                    {group.tag}
+        <section className="page-content">
+          {activePage === "tasks" ? (
+            <section className="panel tasks-page">
+              <header className="section-head">
+                <h1 className="title">Operations</h1>
+                <div className="stats-inline">
+                  <span>
+                    <Circle size={10} weight="fill" /> {openTasks.length} open
                   </span>
-                  <Badge>{group.tasks.length}</Badge>
-                </header>
-                <ul className="task-list">{group.tasks.map((task) => renderTaskRow(task))}</ul>
+                  <span>
+                    <CheckCircle size={10} weight="fill" /> {doneTasks.length} closed
+                  </span>
+                </div>
+              </header>
+
+              <section className="task-create-grid" aria-label="Create task">
+                <input
+                  className="text-input"
+                  placeholder="Task title"
+                  value={taskTitle}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskTitle(event.currentTarget.value)}
+                />
+                <input
+                  className="text-input"
+                  placeholder="Task note"
+                  value={taskNote}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskNote(event.currentTarget.value)}
+                />
+                <input
+                  className="text-input"
+                  placeholder="tags (comma separated)"
+                  value={taskTags}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskTags(event.currentTarget.value)}
+                />
+                <input
+                  className="text-input"
+                  type="date"
+                  value={taskDueDate}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskDueDate(event.currentTarget.value)}
+                />
+                <button className="btn btn-primary" onClick={() => void createTask()}>
+                  Add task
+                </button>
               </section>
-            ))}
-            {openGroups.length === 0 ? <p className="task-meta">No open tasks.</p> : null}
-          </div>
 
-          <div className="section-head">
-            <h2>Closed</h2>
-            <Button onClick={() => setShowClosed((value) => !value)}>
-              {showClosed ? <CaretDown size={16} weight="bold" /> : <CaretRight size={16} weight="bold" />}
-              {showClosed ? "Hide" : "Show"} closed ({doneTasks.length})
-            </Button>
-          </div>
-          {showClosed ? (
-            <div className="tag-grid">
-              {doneGroups.map((group) => (
-                <section className="tag-group tag-group-closed" key={`done-${group.tag}`}>
-                  <header className="tag-head">
-                    <span className="tag-label">
-                      <Tag size={14} weight="bold" />
-                      {group.tag}
-                    </span>
-                    <Badge>{group.tasks.length}</Badge>
-                  </header>
-                  <ul className="task-list">{group.tasks.map((task) => renderTaskRow(task))}</ul>
-                </section>
-              ))}
-              {doneGroups.length === 0 ? <p className="task-meta">No closed tasks.</p> : null}
-            </div>
-          ) : null}
-        </section>
-      ) : activePage === "analytics" ? (
-        <section className="card analytics-page">
-          <header className="section-head analytics-head">
-            <h2>
-              <ChartBar size={18} weight="fill" /> Analytics ({analyticsDays} days)
-            </h2>
-            {loadingAnalytics ? <span className="task-meta">Loading...</span> : null}
-          </header>
-          {analytics ? (
-            <p className="task-meta">
-              Window: {analytics.window.startDate} to {analytics.window.endDate} ({analytics.window.timeZone})
-            </p>
-          ) : null}
-          {analyticsError ? <p className="error-text">{analyticsError}</p> : null}
-
-          <div className="metrics-grid">
-            <section className="metric-card">
-              <span className="metric-label">Created</span>
-              <strong className="metric-value">{analytics?.totals.createdInWindow ?? 0}</strong>
-            </section>
-            <section className="metric-card">
-              <span className="metric-label">Completed</span>
-              <strong className="metric-value">{analytics?.totals.completedInWindow ?? 0}</strong>
-            </section>
-            <section className="metric-card">
-              <span className="metric-label">Open now</span>
-              <strong className="metric-value">{analytics?.totals.openNow ?? 0}</strong>
-            </section>
-            <section className="metric-card">
-              <span className="metric-label">Overdue open</span>
-              <strong className="metric-value">{analytics?.totals.overdueOpen ?? 0}</strong>
-            </section>
-            <section className="metric-card">
-              <span className="metric-label">Completion rate</span>
-              <strong className="metric-value">{Math.round((analytics?.totals.completionRateInWindow ?? 0) * 100)}%</strong>
-            </section>
-          </div>
-
-          <section className="analytics-card">
-            <header className="section-head analytics-head">
-              <h2>Daily throughput</h2>
-              <div className="analytics-legend">
-                <span className="legend-item">
-                  <span className="legend-swatch legend-created" /> Created
-                </span>
-                <span className="legend-item">
-                  <span className="legend-swatch legend-completed" /> Completed
-                </span>
+              <div className="section-head">
+                <h2>Open</h2>
+                {loadingTasks ? <span className="task-meta">Loading...</span> : null}
               </div>
-            </header>
-            <div className="chart-grid" role="img" aria-label="Daily created and completed todos">
-              {dailyMetrics.map((point) => {
-                const createdHeight = `${Math.round((point.created / maxDailyMetric) * 100)}%`;
-                const completedHeight = `${Math.round((point.completed / maxDailyMetric) * 100)}%`;
-                return (
-                  <div className="chart-day" key={point.date}>
-                    <div className="chart-bars">
-                      <span
-                        className="chart-bar chart-bar-created"
-                        style={{ height: createdHeight }}
-                        title={`${dayLabel(point.date)}: ${point.created} created`}
-                      />
-                      <span
-                        className="chart-bar chart-bar-completed"
-                        style={{ height: completedHeight }}
-                        title={`${dayLabel(point.date)}: ${point.completed} completed`}
-                      />
-                    </div>
-                    <span className="chart-label">{dayLabel(point.date)}</span>
+              {taskError ? <p className="error-text">{taskError}</p> : null}
+
+              <div className="tag-grid">
+                {openGroups.map((group) => (
+                  <section className="tag-group" key={`open-${group.tag}`}>
+                    <header className="tag-head">
+                      <span className="tag-label">
+                        <Tag size={12} weight="bold" />
+                        {group.tag}
+                      </span>
+                      <span className="count-badge">{group.tasks.length}</span>
+                    </header>
+                    <ul className="task-list">{group.tasks.map((task) => renderTaskRow(task))}</ul>
+                  </section>
+                ))}
+                {openGroups.length === 0 ? <p className="task-meta">No open tasks.</p> : null}
+              </div>
+
+              <div className="section-head">
+                <h2>Closed</h2>
+                <button className="btn" onClick={() => setShowClosed((value) => !value)}>
+                  {showClosed ? <CaretDown size={14} weight="bold" /> : <CaretRight size={14} weight="bold" />}
+                  {showClosed ? "Hide" : "Show"} closed ({doneTasks.length})
+                </button>
+              </div>
+
+              {showClosed ? (
+                <div className="tag-grid">
+                  {doneGroups.map((group) => (
+                    <section className="tag-group tag-group-closed" key={`done-${group.tag}`}>
+                      <header className="tag-head">
+                        <span className="tag-label">
+                          <Tag size={12} weight="bold" />
+                          {group.tag}
+                        </span>
+                        <span className="count-badge">{group.tasks.length}</span>
+                      </header>
+                      <ul className="task-list">{group.tasks.map((task) => renderTaskRow(task))}</ul>
+                    </section>
+                  ))}
+                  {doneGroups.length === 0 ? <p className="task-meta">No closed tasks.</p> : null}
+                </div>
+              ) : null}
+            </section>
+          ) : activePage === "analytics" ? (
+            <section className="panel analytics-page">
+              <header className="section-head analytics-head">
+                <h1 className="title">
+                  <ChartBar size={16} weight="fill" /> Analytics ({analyticsDays} days)
+                </h1>
+                {loadingAnalytics ? <span className="task-meta">Loading...</span> : null}
+              </header>
+              {analytics ? (
+                <p className="task-meta panel-line">
+                  Window: {analytics.window.startDate} to {analytics.window.endDate} ({analytics.window.timeZone})
+                </p>
+              ) : null}
+              {analyticsError ? <p className="error-text panel-line">{analyticsError}</p> : null}
+
+              <div className="metrics-grid">
+                <section className="metric-box">
+                  <span className="metric-label">Created</span>
+                  <strong className="metric-value">{analytics?.totals.createdInWindow ?? 0}</strong>
+                </section>
+                <section className="metric-box">
+                  <span className="metric-label">Completed</span>
+                  <strong className="metric-value">{analytics?.totals.completedInWindow ?? 0}</strong>
+                </section>
+                <section className="metric-box">
+                  <span className="metric-label">Open now</span>
+                  <strong className="metric-value">{analytics?.totals.openNow ?? 0}</strong>
+                </section>
+                <section className="metric-box">
+                  <span className="metric-label">Overdue open</span>
+                  <strong className="metric-value">{analytics?.totals.overdueOpen ?? 0}</strong>
+                </section>
+                <section className="metric-box">
+                  <span className="metric-label">Completion rate</span>
+                  <strong className="metric-value">{Math.round((analytics?.totals.completionRateInWindow ?? 0) * 100)}%</strong>
+                </section>
+              </div>
+
+              <section className="panel-subsection">
+                <header className="section-head analytics-head">
+                  <h2>Daily throughput</h2>
+                  <div className="analytics-legend">
+                    <span className="legend-item">
+                      <span className="legend-swatch legend-created" /> Created
+                    </span>
+                    <span className="legend-item">
+                      <span className="legend-swatch legend-completed" /> Completed
+                    </span>
                   </div>
-                );
-              })}
-            </div>
-          </section>
+                </header>
+                <div className="chart-grid" role="img" aria-label="Daily created and completed todos">
+                  {dailyMetrics.map((point) => {
+                    const createdHeight = `${Math.round((point.created / maxDailyMetric) * 100)}%`;
+                    const completedHeight = `${Math.round((point.completed / maxDailyMetric) * 100)}%`;
+                    return (
+                      <div className="chart-day" key={point.date}>
+                        <div className="chart-bars">
+                          <span
+                            className="chart-bar chart-bar-created"
+                            style={{ height: createdHeight }}
+                            title={`${dayLabel(point.date)}: ${point.created} created`}
+                          />
+                          <span
+                            className="chart-bar chart-bar-completed"
+                            style={{ height: completedHeight }}
+                            title={`${dayLabel(point.date)}: ${point.completed} completed`}
+                          />
+                        </div>
+                        <span className="chart-label">{dayLabel(point.date)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
 
-          <div className="breakdown-grid">
-            <section className="analytics-card">
-              <h2>By owner</h2>
-              <ul className="breakdown-list">
-                {analyticsOwnerBreakdown.map((entry) => (
-                  <li key={entry.owner}>
-                    <span>{entry.owner}</span>
-                    <span>
-                      open {entry.openNow} | +{entry.createdInWindow} / -{entry.completedInWindow}
-                    </span>
-                  </li>
-                ))}
-                {analyticsOwnerBreakdown.length === 0 ? <li>No owner data.</li> : null}
-              </ul>
-            </section>
+              <div className="breakdown-grid">
+                <section className="panel-subsection">
+                  <h2>By owner</h2>
+                  <ul className="breakdown-list">
+                    {analyticsOwnerBreakdown.map((entry) => (
+                      <li key={entry.owner}>
+                        <span>{entry.owner}</span>
+                        <span>
+                          open {entry.openNow} | +{entry.createdInWindow} / -{entry.completedInWindow}
+                        </span>
+                      </li>
+                    ))}
+                    {analyticsOwnerBreakdown.length === 0 ? <li>No owner data.</li> : null}
+                  </ul>
+                </section>
 
-            <section className="analytics-card">
-              <h2>By project</h2>
-              <ul className="breakdown-list">
-                {analyticsProjectBreakdown.map((entry) => (
-                  <li key={entry.projectTag}>
-                    <span>{entry.projectTag}</span>
-                    <span>
-                      open {entry.openNow} | +{entry.createdInWindow} / -{entry.completedInWindow}
-                    </span>
-                  </li>
-                ))}
-                {analyticsProjectBreakdown.length === 0 ? <li>No project data.</li> : null}
-              </ul>
+                <section className="panel-subsection">
+                  <h2>By project</h2>
+                  <ul className="breakdown-list">
+                    {analyticsProjectBreakdown.map((entry) => (
+                      <li key={entry.projectTag}>
+                        <span>{entry.projectTag}</span>
+                        <span>
+                          open {entry.openNow} | +{entry.createdInWindow} / -{entry.completedInWindow}
+                        </span>
+                      </li>
+                    ))}
+                    {analyticsProjectBreakdown.length === 0 ? <li>No project data.</li> : null}
+                  </ul>
+                </section>
+              </div>
             </section>
-          </div>
+          ) : (
+            <section className="panel user-page">
+              <h1 className="title">
+                <UserCircle size={16} weight="fill" /> User token
+              </h1>
+              <label className="token-label panel-line" htmlFor="token-field">
+                Bearer token
+              </label>
+              <input id="token-field" className="text-input panel-line" value={token ?? ""} readOnly />
+              <div className="token-actions">
+                <button className="btn" onClick={() => void copyToken()} disabled={!token}>
+                  <ClipboardText size={14} weight="bold" />
+                  {copiedToken ? "Copied" : "Copy token"}
+                </button>
+              </div>
+            </section>
+          )}
         </section>
-      ) : (
-        <section className="card">
-          <h2>
-            <UserCircle size={18} weight="fill" /> User token
-          </h2>
-          <SensitiveInput label="Bearer token" value={token ?? ""} readOnly />
-          {token ? <ClipboardText text={token} tooltip={{ text: "Copy token", copiedText: "Token copied" }} /> : null}
-        </section>
-      )}
+      </div>
+
+      <section className="dock" aria-label="Control dock">
+        <button className="dock-action" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}> 
+          {theme === "dark" ? <Sun size={14} weight="bold" /> : <Moon size={14} weight="bold" />}
+          {theme === "dark" ? "Light" : "Dark"}
+        </button>
+        <span className="dock-divider" aria-hidden="true" />
+        <button className="dock-action" onClick={() => void logout()}>
+          <SignOut size={14} weight="bold" />
+          Exit
+        </button>
+      </section>
     </main>
   );
 }

@@ -484,6 +484,9 @@ const mapAppPathToAssetPath = (pathname: string): string => {
   if (pathname === "/" || pathname === "/index.html") {
     return "/index.html";
   }
+  if (pathname === "/analytics" || pathname === "/user") {
+    return "/index.html";
+  }
   if (pathname.startsWith("/assets/")) {
     return pathname;
   }
@@ -2109,6 +2112,7 @@ const uiApiProxy = async (request: Request, env: Env, requestContext: RequestCon
 
 const handleFetch = async (request: Request, env: Env, requestContext: RequestContext): Promise<Response> => {
   const { pathname } = new URL(request.url);
+  const isUiPageRoute = pathname === "/" || pathname === "/index.html" || pathname === "/analytics" || pathname === "/user";
 
   if (pathname === "/favicon.ico") {
     return withRequestIdHeader(new Response(null, { status: 204 }), requestContext.requestId);
@@ -2129,7 +2133,7 @@ const handleFetch = async (request: Request, env: Env, requestContext: RequestCo
   if (pathname.startsWith("/ui/api/")) {
     return uiApiProxy(request, env, requestContext);
   }
-  if (pathname === "/" || pathname === "/index.html" || pathname.startsWith("/assets/")) {
+  if (isUiPageRoute || pathname.startsWith("/assets/")) {
     return withRequestIdHeader(await serveUiAsset(request, env), requestContext.requestId);
   }
   if (pathname === "/app" || pathname === "/app/" || pathname.startsWith("/app/")) {
