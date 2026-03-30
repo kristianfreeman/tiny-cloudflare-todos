@@ -14,6 +14,7 @@
   --danger: #ff7878;
   --success: #85d197;
   --focus-ring: #6f98d4;
+  --weekend-bg: #18212d;
 }
 
 :root[data-theme="light"] {
@@ -29,6 +30,7 @@
   --danger: #b84040;
   --success: #1f7f3e;
   --focus-ring: #3b6eb9;
+  --weekend-bg: #e6edf5;
 }
 
 * {
@@ -466,6 +468,10 @@ input {
   gap: 1px;
   align-items: end;
   padding: 1px;
+}
+
+.chart-day-weekend .chart-bars {
+  background: var(--weekend-bg);
 }
 
 .chart-bar {

@@ -159,6 +159,15 @@ const dayLabel = (isoDay: string): string => {
   return parsed.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
 };
 
+const isWeekendDay = (isoDay: string): boolean => {
+  const parsed = new Date(`${isoDay}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) {
+    return false;
+  }
+  const day = parsed.getUTCDay();
+  return day === 0 || day === 6;
+};
+
 const browserTimeZone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
 export function App() {
@@ -642,8 +651,9 @@ export function App() {
                   {dailyMetrics.map((point) => {
                     const createdHeight = `${Math.round((point.created / maxDailyMetric) * 100)}%`;
                     const completedHeight = `${Math.round((point.completed / maxDailyMetric) * 100)}%`;
+                    const weekendClass = isWeekendDay(point.date) ? " chart-day-weekend" : "";
                     return (
-                      <div className="chart-day" key={point.date}>
+                      <div className={`chart-day${weekendClass}`} key={point.date}>
                         <div className="chart-bars">
                           <span
                             className="chart-bar chart-bar-created"
