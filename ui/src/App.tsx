@@ -156,7 +156,7 @@ const dayLabel = (isoDay: string): string => {
   if (Number.isNaN(parsed.getTime())) {
     return isoDay;
   }
-  return parsed.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return parsed.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
 };
 
 const browserTimeZone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
