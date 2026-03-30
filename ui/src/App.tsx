@@ -156,7 +156,8 @@ const dayLabel = (isoDay: string): string => {
   if (Number.isNaN(parsed.getTime())) {
     return isoDay;
   }
-  return parsed.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+  const weekday = parsed.toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" });
+  return `${weekday} ${isoDay}`;
 };
 
 const isWeekendDay = (isoDay: string): boolean => {
@@ -649,25 +650,11 @@ export function App() {
                 </header>
                 <div className="chart-grid" role="img" aria-label="Daily created and completed todos">
                   {dailyMetrics.map((point) => {
-                    const createdRatio = point.created / maxDailyMetric;
-                    const completedRatio = point.completed / maxDailyMetric;
-                    const createdHeight = `${Math.round(createdRatio * 100)}%`;
-                    const completedHeight = `${Math.round(completedRatio * 100)}%`;
-                    const createdSignalOpacity = Math.max(0.2, createdRatio);
-                    const completedSignalOpacity = Math.max(0.2, completedRatio);
+                    const createdHeight = `${Math.round((point.created / maxDailyMetric) * 100)}%`;
+                    const completedHeight = `${Math.round((point.completed / maxDailyMetric) * 100)}%`;
                     const weekendClass = isWeekendDay(point.date) ? " chart-day-weekend" : "";
                     return (
                       <div className={`chart-day${weekendClass}`} key={point.date}>
-                        <div className="chart-signal" aria-hidden>
-                          <span
-                            className="chart-signal-chip chart-signal-created"
-                            style={{ opacity: createdSignalOpacity }}
-                          />
-                          <span
-                            className="chart-signal-chip chart-signal-completed"
-                            style={{ opacity: completedSignalOpacity }}
-                          />
-                        </div>
                         <div className="chart-bars">
                           <span
                             className="chart-bar chart-bar-created"
