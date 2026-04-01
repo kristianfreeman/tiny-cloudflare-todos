@@ -37,3 +37,9 @@
 - Project tag inference should come directly from the current working directory's git root basename, not from broader project registry heuristics.
 - When `add`/`edit --tag` includes a `project:*` value that differs from cwd-inferred project tag, reject by default and require `--confirm` for intentional cross-project writes.
 - Keep `TINY_TODO_PROJECT_TAG` as explicit override, but still gate mismatched manual tag values behind `--confirm`.
+
+## tiny-todo Wrapper CWD Passthrough and Legacy Tag Flattening Cleanup
+
+- `bin/tiny-todo` launches CLI with `npm --prefix`, so CLI must read `TINY_TODO_CALLER_CWD` (forwarded from wrapper `$PWD`) to infer project tags from caller location instead of repo path.
+- Historical tasks created before strict tag validation can carry invalid project tags (for example dots/underscores) or multiple project tags; cleanup requires bulk retagging through API patch.
+- For cleanup scripts, if only tags change, include `status` in patch payload to bypass Worker `no updates provided` guard that otherwise ignores tag-only updates.

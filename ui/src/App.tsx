@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 
 interface Task {
   id: string;
@@ -63,6 +63,14 @@ interface AnalyticsResponse {
       owner: AnalyticsOwnerBreakdown[];
       project: AnalyticsProjectBreakdown[];
     };
+  };
+}
+
+interface ChangesResponse {
+  changes: {
+    checkedAt: string;
+    cursor: string | null;
+    hasChanges: boolean;
   };
 }
 
@@ -158,6 +166,10 @@ const isWeekendDay = (isoDay: string): boolean => {
 
 const browserTimeZone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
+const ACTIVE_POLL_INTERVAL_MS = 10_000;
+const IDLE_POLL_INTERVAL_MS = 120_000;
+const ACTIVE_INTERACTION_WINDOW_MS = 20_000;
+
 const isoTodayLocal = (): string => {
   const now = new Date();
   const year = now.getFullYear();
@@ -210,6 +222,8 @@ export function App() {
   const [loadingAnalytics, setLoadingAnalytics] = useState(false);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [copiedToken, setCopiedToken] = useState(false);
+  const lastInteractionAtRef = useRef<number>(Date.now());
+  const changesCursorRef = useRef<string | null>(null);
 
   const openGroups = useMemo(() => groupTasksByTag(openTasks), [openTasks]);
   const doneGroups = useMemo(() => groupTasksByTag(closedTasks), [closedTasks]);
@@ -233,27 +247,37 @@ export function App() {
     setSessionChecked(true);
   };
 
-  const loadOpenTasks = async (): Promise<void> => {
-    setLoadingTasks(true);
+  const loadOpenTasks = async (options?: { silent?: boolean }): Promise<void> => {
+    if (!options?.silent) {
+      setLoadingTasks(true);
+    }
     const openResponse = await fetch("/ui/api/tasks?status=open&limit=500", { method: "GET" });
     if (!openResponse.ok) {
       setTaskError(await readError(openResponse));
-      setLoadingTasks(false);
+      if (!options?.silent) {
+        setLoadingTasks(false);
+      }
       return;
     }
     const openPayload = (await openResponse.json()) as TasksResponse;
 
     setOpenTasks(openPayload.tasks);
     setTaskError(null);
-    setLoadingTasks(false);
+    if (!options?.silent) {
+      setLoadingTasks(false);
+    }
   };
 
-  const loadClosedTasks = async (): Promise<void> => {
-    setLoadingClosedTasks(true);
+  const loadClosedTasks = async (options?: { silent?: boolean }): Promise<void> => {
+    if (!options?.silent) {
+      setLoadingClosedTasks(true);
+    }
     const response = await fetch("/ui/api/tasks?status=done&limit=500", { method: "GET" });
     if (!response.ok) {
       setTaskError(await readError(response));
-      setLoadingClosedTasks(false);
+      if (!options?.silent) {
+        setLoadingClosedTasks(false);
+      }
       return;
     }
 
@@ -261,7 +285,9 @@ export function App() {
     setClosedTasks(payload.tasks);
     setClosedLoaded(true);
     setTaskError(null);
-    setLoadingClosedTasks(false);
+    if (!options?.silent) {
+      setLoadingClosedTasks(false);
+    }
   };
 
   const loadMe = async (): Promise<void> => {
@@ -273,8 +299,10 @@ export function App() {
     setToken(payload.token);
   };
 
-  const loadAnalytics = async (): Promise<void> => {
-    setLoadingAnalytics(true);
+  const loadAnalytics = async (options?: { silent?: boolean }): Promise<void> => {
+    if (!options?.silent) {
+      setLoadingAnalytics(true);
+    }
     const timeZone = browserTimeZone();
     const response = await fetch(
       `/ui/api/analytics/overview?days=${analyticsDays}&timeZone=${encodeURIComponent(timeZone)}`,
@@ -282,13 +310,37 @@ export function App() {
     );
     if (!response.ok) {
       setAnalyticsError(await readError(response));
-      setLoadingAnalytics(false);
+      if (!options?.silent) {
+        setLoadingAnalytics(false);
+      }
       return;
     }
     const payload = (await response.json()) as AnalyticsResponse;
     setAnalytics(payload.analytics);
     setAnalyticsError(null);
-    setLoadingAnalytics(false);
+    if (!options?.silent) {
+      setLoadingAnalytics(false);
+    }
+  };
+
+  const hasFocusedEditable = (): boolean => {
+    const activeElement = document.activeElement;
+    if (!activeElement) {
+      return false;
+    }
+    const tagName = activeElement.tagName.toLowerCase();
+    return (
+      activeElement instanceof HTMLElement &&
+      (activeElement.isContentEditable || tagName === "input" || tagName === "textarea" || tagName === "select")
+    );
+  };
+
+  const refreshVisibleData = async (): Promise<void> => {
+    await Promise.all([
+      loadOpenTasks({ silent: true }),
+      loadAnalytics({ silent: true }),
+      showClosed ? loadClosedTasks({ silent: true }) : Promise.resolve()
+    ]);
   };
 
   useEffect(() => {
@@ -336,6 +388,82 @@ export function App() {
     }
     void loadClosedTasks();
   }, [authenticated, showClosed, closedLoaded]);
+
+  useEffect(() => {
+    if (!authenticated) {
+      changesCursorRef.current = null;
+      return;
+    }
+
+    let cancelled = false;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const markInteraction = (): void => {
+      lastInteractionAtRef.current = Date.now();
+    };
+
+    const activityEvents: Array<keyof WindowEventMap> = ["mousemove", "keydown", "pointerdown", "scroll", "focus"];
+    for (const eventName of activityEvents) {
+      window.addEventListener(eventName, markInteraction, { passive: true });
+    }
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState === "visible") {
+        markInteraction();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    const nextPollDelay = (): number => {
+      const isVisible = document.visibilityState === "visible";
+      const interactedRecently = Date.now() - lastInteractionAtRef.current <= ACTIVE_INTERACTION_WINDOW_MS;
+      return isVisible && interactedRecently ? ACTIVE_POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS;
+    };
+
+    const pollChanges = async (): Promise<void> => {
+      if (cancelled) {
+        return;
+      }
+
+      try {
+        const params = new URLSearchParams();
+        if (changesCursorRef.current) {
+          params.set("since", changesCursorRef.current);
+        }
+        const query = params.toString();
+        const response = await fetch(`/ui/api/changes${query ? `?${query}` : ""}`, { method: "GET" });
+        if (response.ok) {
+          const payload = (await response.json()) as ChangesResponse;
+          if (payload.changes.cursor) {
+            changesCursorRef.current = payload.changes.cursor;
+          }
+          if (payload.changes.hasChanges && !hasFocusedEditable()) {
+            await refreshVisibleData();
+          }
+        }
+      } catch {
+        // best-effort background refresh
+      }
+
+      if (!cancelled) {
+        pollTimer = setTimeout(() => {
+          void pollChanges();
+        }, nextPollDelay());
+      }
+    };
+
+    void pollChanges();
+
+    return () => {
+      cancelled = true;
+      if (pollTimer) {
+        clearTimeout(pollTimer);
+      }
+      for (const eventName of activityEvents) {
+        window.removeEventListener(eventName, markInteraction);
+      }
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [authenticated, showClosed, analyticsDays]);
 
   const login = async (): Promise<void> => {
     const response = await fetch("/ui/session", {

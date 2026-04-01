@@ -152,6 +152,14 @@ const toIsoDateInTimezone = (date: Date, timeZone: string): string => {
   return `${year}-${month}-${day}`;
 };
 
+const toTimestampMs = (value: string): number | null => {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  return parsed.getTime();
+};
+
 const timestampToIsoDateInTimezone = (value: string | null | undefined, timeZone: string): string | null => {
   if (!value) {
     return null;
@@ -1319,6 +1327,57 @@ const analyticsOverview = async (request: Request, env: Env, auth: AuthContext):
   });
 };
 
+const changesOverview = async (request: Request, env: Env, auth: AuthContext): Promise<Response> => {
+  const db = dbForEnv(env);
+  const url = new URL(request.url);
+  const sinceRaw = url.searchParams.get("since")?.trim() ?? null;
+  const sinceMs = sinceRaw ? toTimestampMs(sinceRaw) : null;
+
+  if (sinceRaw && sinceMs === null) {
+    return error("since must be a valid ISO timestamp", 422);
+  }
+
+  const allowedListIds = await listIdsForMember(env, auth.userId, "viewer");
+  if (allowedListIds.length === 0) {
+    return json({
+      changes: {
+        checkedAt: new Date().toISOString(),
+        cursor: null,
+        hasChanges: false
+      }
+    });
+  }
+
+  const LIST_ID_CHUNK_SIZE = 200;
+  let latestUpdatedAt: string | null = null;
+
+  for (let index = 0; index < allowedListIds.length; index += LIST_ID_CHUNK_SIZE) {
+    const chunk = allowedListIds.slice(index, index + LIST_ID_CHUNK_SIZE);
+    const rows = await db
+      .select({ latestUpdatedAt: sql<string | null>`max(${tasks.updatedAt})` })
+      .from(tasks)
+      .where(inArray(tasks.listId, chunk));
+    const chunkLatest = rows[0]?.latestUpdatedAt ?? null;
+    if (!chunkLatest) {
+      continue;
+    }
+    if (!latestUpdatedAt || chunkLatest > latestUpdatedAt) {
+      latestUpdatedAt = chunkLatest;
+    }
+  }
+
+  const latestMs = latestUpdatedAt ? toTimestampMs(latestUpdatedAt) : null;
+  const hasChanges = sinceMs !== null && latestMs !== null ? latestMs > sinceMs : false;
+
+  return json({
+    changes: {
+      checkedAt: new Date().toISOString(),
+      cursor: latestUpdatedAt,
+      hasChanges
+    }
+  });
+};
+
 const updateTask = async (
   request: Request,
   env: Env,
@@ -2012,6 +2071,9 @@ const handleApiFetch = async (request: Request, env: Env, requestContext: Reques
   }
   if (pathname === "/analytics/overview" && request.method === "GET") {
     return withRequestIdHeader(await analyticsOverview(request, env, auth), requestContext.requestId);
+  }
+  if (pathname === "/changes" && request.method === "GET") {
+    return withRequestIdHeader(await changesOverview(request, env, auth), requestContext.requestId);
   }
 
   const taskRoute = routeTaskId(pathname);

@@ -523,6 +523,49 @@ describe("worker integration", () => {
     expect(body.analytics.guidance.interpretationHints.length).toBeGreaterThan(0);
   });
 
+  it("returns a changes cursor and detects updates after the cursor", async () => {
+    const context = await newContext();
+
+    const created = await createTask(context, { title: "Track cursor" });
+    const firstChanges = await apiRequest(context, "/changes", { method: "GET" });
+    expect(firstChanges.status).toBe(200);
+    const firstBody = await readJson<{ changes: { cursor: string | null; hasChanges: boolean } }>(firstChanges);
+    expect(firstBody.changes.cursor).not.toBeNull();
+    expect(firstBody.changes.hasChanges).toBe(false);
+
+    const noChangeResponse = await apiRequest(
+      context,
+      `/changes?since=${encodeURIComponent(firstBody.changes.cursor ?? "")}`,
+      { method: "GET" }
+    );
+    expect(noChangeResponse.status).toBe(200);
+    const noChangeBody = await readJson<{ changes: { cursor: string | null; hasChanges: boolean } }>(noChangeResponse);
+    expect(noChangeBody.changes.hasChanges).toBe(false);
+
+    const completeResponse = await apiRequest(context, `/tasks/${encodeURIComponent(created.id)}/complete`, { method: "POST" });
+    expect(completeResponse.status).toBe(200);
+
+    const changedResponse = await apiRequest(
+      context,
+      `/changes?since=${encodeURIComponent(firstBody.changes.cursor ?? "")}`,
+      { method: "GET" }
+    );
+    expect(changedResponse.status).toBe(200);
+    const changedBody = await readJson<{ changes: { cursor: string | null; hasChanges: boolean } }>(changedResponse);
+    expect(changedBody.changes.hasChanges).toBe(true);
+    expect((changedBody.changes.cursor ?? "") >= (firstBody.changes.cursor ?? "")).toBe(true);
+  });
+
+  it("validates the changes cursor query parameter", async () => {
+    const context = await newContext();
+
+    const response = await apiRequest(context, "/changes?since=not-a-timestamp", { method: "GET" });
+    expect(response.status).toBe(422);
+    await expect(readJson<{ error: string }>(response)).resolves.toEqual({
+      error: "since must be a valid ISO timestamp"
+    });
+  });
+
   it("includes tag breakdowns for tasks created by other list members", async () => {
     const context = await newContext();
     await context.createUserToken({ userId: "editor-user", token: "editor-token" });
