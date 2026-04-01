@@ -17,7 +17,9 @@ if [[ ! -x "$SEC_BIN" ]]; then
 fi
 
 TODO_API_URL="$($SEC_BIN get TODO_API_URL --scope global)"
+CALLER_CWD="$PWD"
 
 exec env TODO_API_URL="$TODO_API_URL" \
+  TINY_TODO_CALLER_CWD="$CALLER_CWD" \
   "$SEC_BIN" run TODO_API_TOKEN --scope global -- \
   npm --prefix "$REPO_DIR" run cli -- "$@"

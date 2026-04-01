@@ -154,6 +154,11 @@ const parseTagsOption = (rawValue: string | undefined): string[] | undefined => 
 
 const normalizePath = (value: string): string => path.resolve(value);
 
+const resolveInvocationCwd = (cwdValue?: string): string => {
+  const callerCwdFromEnv = process.env.TINY_TODO_CALLER_CWD?.trim();
+  return normalizePath(cwdValue ?? callerCwdFromEnv ?? process.cwd());
+};
+
 const slugFromName = (value: string): string => {
   const normalized = value
     .trim()
@@ -180,7 +185,7 @@ const resolveGitRoot = (cwd: string): string | undefined => {
 };
 
 const inferProjectTagForCwd = (cwdValue?: string): string => {
-  const cwd = normalizePath(cwdValue ?? process.cwd());
+  const cwd = resolveInvocationCwd(cwdValue);
   const root = resolveGitRoot(cwd) ?? cwd;
 
   const explicitProjectTag = process.env.TINY_TODO_PROJECT_TAG?.trim().toLowerCase();
@@ -446,7 +451,7 @@ const main = async (): Promise<void> => {
     const cwd = optionString(parsed.options, "cwd");
     const projectTag = inferProjectTagForCwd(cwd);
     if (optionFlag(parsed.options, "json")) {
-      printJson({ projectTag, cwd: normalizePath(cwd ?? process.cwd()) });
+      printJson({ projectTag, cwd: resolveInvocationCwd(cwd) });
       return;
     }
     process.stdout.write(`${projectTag}\n`);

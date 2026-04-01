@@ -11,14 +11,20 @@ interface CliResult {
   stderr: string;
 }
 
-const runCli = async (args: string[], apiUrl: string, token: string): Promise<CliResult> => {
+const runCli = async (
+  args: string[],
+  apiUrl: string,
+  token: string,
+  extraEnv: Record<string, string> = {}
+): Promise<CliResult> => {
   return await new Promise<CliResult>((resolve, reject) => {
     const child = spawn(npmExecutable, ["run", "-s", "cli", "--", ...args], {
       cwd: process.cwd(),
       env: {
         ...process.env,
         TODO_API_URL: apiUrl,
-        TODO_API_TOKEN: token
+        TODO_API_TOKEN: token,
+        ...extraEnv
       }
     });
 
@@ -230,6 +236,18 @@ describe("cli list json and filter flags", () => {
 
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("--due-before must be YYYY-MM-DD");
+  });
+
+  it("project-tag prefers caller cwd from env when no --cwd is provided", async () => {
+    const result = await runCli(["project-tag", "--json"], "http://127.0.0.1:9999", "token", {
+      TINY_TODO_CALLER_CWD: "/Users/kristian/Developer/qr"
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe("");
+    const output = JSON.parse(result.stdout) as { projectTag: string; cwd: string };
+    expect(output.projectTag).toBe("project:qr");
+    expect(output.cwd).toBe("/Users/kristian/Developer/qr");
   });
 
   it("outputs task list as JSON and passes filter query params", async () => {
