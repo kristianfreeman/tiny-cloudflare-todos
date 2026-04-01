@@ -1247,18 +1247,23 @@ const analyticsOverview = async (request: Request, env: Env, auth: AuthContext):
   const completionRateInWindow =
     createdInWindow > 0 ? Number((completedInWindow / createdInWindow).toFixed(3)) : 0;
 
-  const sortByHighestTotals = <T extends { openNow: number; createdInWindow: number; completedInWindow: number }>(
+  const sortByHighestCombinedActivity = <T extends { openNow: number; createdInWindow: number; completedInWindow: number }>(
     left: T,
     right: T
   ): number => {
-    if (right.openNow !== left.openNow) {
-      return right.openNow - left.openNow;
+    const leftCombined = left.openNow + left.createdInWindow + left.completedInWindow;
+    const rightCombined = right.openNow + right.createdInWindow + right.completedInWindow;
+    if (rightCombined !== leftCombined) {
+      return rightCombined - leftCombined;
     }
     if (right.createdInWindow !== left.createdInWindow) {
       return right.createdInWindow - left.createdInWindow;
     }
     if (right.completedInWindow !== left.completedInWindow) {
       return right.completedInWindow - left.completedInWindow;
+    }
+    if (right.openNow !== left.openNow) {
+      return right.openNow - left.openNow;
     }
     return 0;
   };
@@ -1280,14 +1285,14 @@ const analyticsOverview = async (request: Request, env: Env, auth: AuthContext):
       daily: [...daily.values()],
       breakdowns: {
         owner: [...ownerBreakdown.values()].sort((left, right) => {
-          const byTotals = sortByHighestTotals(left, right);
+          const byTotals = sortByHighestCombinedActivity(left, right);
           if (byTotals !== 0) {
             return byTotals;
           }
           return left.owner.localeCompare(right.owner);
         }),
         project: [...projectBreakdown.values()].sort((left, right) => {
-          const byTotals = sortByHighestTotals(left, right);
+          const byTotals = sortByHighestCombinedActivity(left, right);
           if (byTotals !== 0) {
             return byTotals;
           }

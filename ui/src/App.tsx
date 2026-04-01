@@ -1,20 +1,4 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from "react";
-import {
-  ChartBar,
-  CaretDown,
-  CaretRight,
-  CheckCircle,
-  Circle,
-  ClipboardText,
-  Moon,
-  Robot,
-  SignOut,
-  Sun,
-  Tag,
-  Trash,
-  User,
-  UserCircle
-} from "@phosphor-icons/react";
 
 interface Task {
   id: string;
@@ -488,29 +472,27 @@ export function App() {
 
   const renderTaskRow = (task: Task) => {
     const owner = ownerOfTask(task);
-    const ownerTitle = owner === "agent" ? "Agent-owned" : owner === "user" ? "User-owned" : "Unknown owner";
+    const ownerLabel = owner === "agent" ? "agent" : "user";
     const dueTone = dueDateTone(task.dueDate);
     return (
       <li className="task-item" key={task.id}>
-        <span className="owner-icon" title={ownerTitle}>
-          {owner === "agent" ? <Robot size={14} weight="fill" /> : <User size={14} weight="fill" />}
-        </span>
-        <input
-          className="text-input"
-          defaultValue={task.title}
-          disabled={task.status === "done"}
-          onBlur={(event: ChangeEvent<HTMLInputElement>) => void updateTaskTitle(task, event.currentTarget.value)}
-        />
+        <div className="task-title-wrap">
+          <input
+            className="text-input"
+            defaultValue={task.title}
+            disabled={task.status === "done"}
+            onBlur={(event: ChangeEvent<HTMLInputElement>) => void updateTaskTitle(task, event.currentTarget.value)}
+          />
+          <em className="task-owner-label">{ownerLabel}</em>
+        </div>
         <span className={`task-meta${dueTone ? ` task-meta-${dueTone}` : ""}`}>{task.dueDate ?? "No due date"}</span>
         <div className="task-item-actions">
           {task.status === "open" ? (
             <button className="btn" onClick={() => void completeTask(task.id)}>
-              <CheckCircle size={14} weight="bold" />
               Complete
             </button>
           ) : null}
           <button className="btn btn-danger" onClick={() => void deleteTask(task.id)}>
-            <Trash size={14} weight="bold" />
             Delete
           </button>
         </div>
@@ -578,10 +560,10 @@ export function App() {
                 <h1 className="title">Operations</h1>
                 <div className="stats-inline">
                   <span>
-                    <Circle size={10} weight="fill" /> {openTasks.length} open
+                    {openTasks.length} open
                   </span>
                   <span>
-                    <CheckCircle size={10} weight="fill" /> {closedTasks.length} closed
+                    {closedLoaded ? `${closedTasks.length} closed` : "closed not loaded"}
                   </span>
                 </div>
               </header>
@@ -627,7 +609,6 @@ export function App() {
                   <section className="tag-group" key={`open-${group.tag}`}>
                     <header className="tag-head">
                       <span className="tag-label">
-                        <Tag size={12} weight="bold" />
                         {group.tag} ({group.tasks.length})
                       </span>
                     </header>
@@ -640,8 +621,8 @@ export function App() {
               <div className="section-head">
                 <h2>Closed</h2>
                 <button className="btn" onClick={() => setShowClosed((value) => !value)}>
-                  {showClosed ? <CaretDown size={14} weight="bold" /> : <CaretRight size={14} weight="bold" />}
-                  {showClosed ? "Hide" : "Show"} closed ({closedTasks.length})
+                  {showClosed ? "Hide" : "Show"}
+                  {closedLoaded ? ` closed (${closedTasks.length})` : " closed"}
                 </button>
               </div>
 
@@ -652,7 +633,6 @@ export function App() {
                     <section className="tag-group tag-group-closed" key={`done-${group.tag}`}>
                       <header className="tag-head">
                         <span className="tag-label">
-                          <Tag size={12} weight="bold" />
                           {group.tag} ({group.tasks.length})
                         </span>
                       </header>
@@ -667,7 +647,7 @@ export function App() {
             <section className="panel analytics-page">
               <header className="section-head analytics-head">
                 <h1 className="title">
-                  <ChartBar size={16} weight="fill" /> Analytics ({analyticsDays} days)
+                  Analytics ({analyticsDays} days)
                 </h1>
                 <div className="analytics-window-toggle" role="group" aria-label="Analytics time window">
                   <button
@@ -762,7 +742,7 @@ export function App() {
               <div className="breakdown-grid">
                 <section className="panel-subsection">
                   <h2>By owner</h2>
-                  <ul className="breakdown-list breakdown-list-owner">
+                  <ul className="breakdown-list breakdown-list-fixed">
                     {analyticsOwnerBreakdown.map((entry) => (
                       <li key={entry.owner}>
                         <span>{entry.owner}</span>
@@ -777,7 +757,7 @@ export function App() {
 
                 <section className="panel-subsection">
                   <h2>By project</h2>
-                  <ul className="breakdown-list">
+                  <ul className="breakdown-list breakdown-list-fixed">
                     {analyticsProjectBreakdown.map((entry) => (
                       <li key={entry.projectTag}>
                         <span>{entry.projectTag}</span>
@@ -795,7 +775,7 @@ export function App() {
             <section className="panel user-page">
               <header className="section-head">
                 <h1 className="title">
-                  <UserCircle size={16} weight="fill" /> Settings
+                  Settings
                 </h1>
               </header>
               <p className="task-meta panel-line">
@@ -808,7 +788,6 @@ export function App() {
               <input id="token-field" className="text-input panel-line" type="password" value={token ?? ""} readOnly />
               <div className="token-actions">
                 <button className="btn" onClick={() => void copyToken()} disabled={!token}>
-                  <ClipboardText size={14} weight="bold" />
                   {copiedToken ? "Copied" : "Copy token"}
                 </button>
               </div>
@@ -819,12 +798,10 @@ export function App() {
 
       <section className="dock" aria-label="Control dock">
         <button className="dock-action" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}> 
-          {theme === "dark" ? <Sun size={14} weight="bold" /> : <Moon size={14} weight="bold" />}
           {theme === "dark" ? "Light" : "Dark"}
         </button>
         <span className="dock-divider" aria-hidden="true" />
         <button className="dock-action" onClick={() => void logout()}>
-          <SignOut size={14} weight="bold" />
           Exit
         </button>
       </section>

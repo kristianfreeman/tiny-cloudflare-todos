@@ -567,12 +567,17 @@ describe("worker integration", () => {
     );
   });
 
-  it("sorts analytics owner and project breakdowns by highest totals first", async () => {
+  it("sorts analytics owner and project breakdowns by highest combined activity", async () => {
     const context = await newContext();
 
-    await createTask(context, { title: "U1", tags: ["owner:user", "project:alpha"] });
-    await createTask(context, { title: "U2", tags: ["owner:user", "project:alpha"] });
-    await createTask(context, { title: "A1", tags: ["owner:agent", "project:zeta"] });
+    await createTask(context, { title: "User open", tags: ["owner:user", "project:alpha"] });
+
+    const agentTaskOne = await createTask(context, { title: "Agent done 1", tags: ["owner:agent", "project:zeta"] });
+    const agentTaskTwo = await createTask(context, { title: "Agent done 2", tags: ["owner:agent", "project:zeta"] });
+    const completeOne = await apiRequest(context, `/tasks/${encodeURIComponent(agentTaskOne.id)}/complete`, { method: "POST" });
+    const completeTwo = await apiRequest(context, `/tasks/${encodeURIComponent(agentTaskTwo.id)}/complete`, { method: "POST" });
+    expect(completeOne.status).toBe(200);
+    expect(completeTwo.status).toBe(200);
 
     const response = await apiRequest(context, "/analytics/overview?days=30", { method: "GET" });
     expect(response.status).toBe(200);
@@ -585,8 +590,8 @@ describe("worker integration", () => {
       };
     }>(response);
 
-    expect(body.analytics.breakdowns.owner[0]?.owner).toBe("owner:user");
-    expect(body.analytics.breakdowns.project[0]?.projectTag).toBe("project:alpha");
+    expect(body.analytics.breakdowns.owner[0]?.owner).toBe("owner:agent");
+    expect(body.analytics.breakdowns.project[0]?.projectTag).toBe("project:zeta");
   });
 
   it("handles analytics tag breakdowns with more than 999 visible tasks", async () => {

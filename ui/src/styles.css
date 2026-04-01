@@ -80,9 +80,7 @@ input {
 .title {
   font-size: 1rem;
   line-height: 1.25;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
+  display: inline-block;
 }
 
 .app-layout {
@@ -176,7 +174,7 @@ input {
 }
 
 .panel-line {
-  padding: 0.35rem 0.6rem;
+  padding: 0.4rem 0.6rem;
 }
 
 .panel-subsection > h2 {
@@ -225,9 +223,7 @@ input {
 }
 
 .stats-inline span {
-  display: inline-flex;
-  gap: 0.3rem;
-  align-items: center;
+  display: inline-block;
 }
 
 .text-input {
@@ -327,16 +323,7 @@ input {
 }
 
 .tag-label {
-  display: inline-flex;
-  gap: 0.3rem;
-  align-items: center;
   text-transform: lowercase;
-}
-
-.count-badge {
-  border: 1px solid var(--border);
-  padding: 0.1rem 0.3rem;
-  color: var(--text-muted);
 }
 
 .task-list {
@@ -352,7 +339,7 @@ input {
   border-top: 1px solid var(--border);
   background: transparent;
   display: grid;
-  grid-template-columns: auto minmax(180px, 1fr) auto auto;
+  grid-template-columns: minmax(180px, 1fr) auto auto;
   gap: 0.2rem;
   padding: 0;
   align-items: center;
@@ -373,13 +360,17 @@ input {
   outline-offset: 0;
 }
 
-.owner-icon {
-  width: 1.6rem;
-  height: 1.6rem;
+.task-title-wrap {
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  align-items: baseline;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.task-owner-label {
   color: var(--text-muted);
+  font-size: 0.9em;
+  white-space: nowrap;
 }
 
 .task-item-actions {
@@ -531,8 +522,8 @@ input {
   gap: 0.35rem;
 }
 
-.breakdown-list-owner {
-  max-height: 290px;
+.breakdown-list-fixed {
+  height: 290px;
   overflow-y: auto;
 }
 
@@ -552,12 +543,12 @@ input {
 .token-label {
   color: var(--text-muted);
   font-size: 0.95em;
-  padding: 0.35rem 0.6rem 0 0.6rem;
+  padding: 0.4rem 0.6rem;
 }
 
 .token-actions {
   display: flex;
-  padding: 0.35rem 0.6rem 0.6rem 0.6rem;
+  padding: 0.4rem 0.6rem;
 }
 
 .dock {
