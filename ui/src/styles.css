@@ -339,7 +339,7 @@ input {
   border-top: 1px solid var(--border);
   background: transparent;
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) auto auto;
+  grid-template-columns: minmax(320px, 1fr) auto auto;
   gap: 0.2rem;
   padding: 0;
   align-items: center;
@@ -354,6 +354,7 @@ input {
   background: transparent;
   min-height: 1.7rem;
   padding: 0.2rem 0.3rem;
+  width: 100%;
 }
 
 .task-item .text-input:focus-visible {
@@ -361,9 +362,14 @@ input {
 }
 
 .task-title-wrap {
-  display: inline-flex;
+  display: flex;
   align-items: baseline;
   gap: 0.35rem;
+  min-width: 0;
+}
+
+.task-title-wrap .text-input {
+  flex: 1 1 auto;
   min-width: 0;
 }
 
