@@ -567,6 +567,28 @@ describe("worker integration", () => {
     );
   });
 
+  it("sorts analytics owner and project breakdowns by highest totals first", async () => {
+    const context = await newContext();
+
+    await createTask(context, { title: "U1", tags: ["owner:user", "project:alpha"] });
+    await createTask(context, { title: "U2", tags: ["owner:user", "project:alpha"] });
+    await createTask(context, { title: "A1", tags: ["owner:agent", "project:zeta"] });
+
+    const response = await apiRequest(context, "/analytics/overview?days=30", { method: "GET" });
+    expect(response.status).toBe(200);
+    const body = await readJson<{
+      analytics: {
+        breakdowns: {
+          owner: Array<{ owner: string }>;
+          project: Array<{ projectTag: string }>;
+        };
+      };
+    }>(response);
+
+    expect(body.analytics.breakdowns.owner[0]?.owner).toBe("owner:user");
+    expect(body.analytics.breakdowns.project[0]?.projectTag).toBe("project:alpha");
+  });
+
   it("handles analytics tag breakdowns with more than 999 visible tasks", async () => {
     const context = await newContext();
     const now = new Date().toISOString();

@@ -82,24 +82,27 @@ interface AnalyticsResponse {
   };
 }
 
-type Page = "tasks" | "analytics" | "user";
+type Page = "tasks" | "analytics" | "settings";
+
+type AnalyticsWindowDays = 1 | 7 | 30;
 
 const pathForPage = (page: Page): string => {
   if (page === "analytics") {
     return "/analytics";
   }
-  if (page === "user") {
-    return "/user";
+  if (page === "settings") {
+    return "/settings";
   }
   return "/";
 };
 
 const pageForPath = (pathname: string): Page => {
-  if (pathname === "/analytics") {
+  const normalizedPath = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+  if (normalizedPath === "/analytics") {
     return "analytics";
   }
-  if (pathname === "/user") {
-    return "user";
+  if (normalizedPath === "/settings" || normalizedPath === "/user") {
+    return "settings";
   }
   return "tasks";
 };
@@ -171,13 +174,41 @@ const isWeekendDay = (isoDay: string): boolean => {
 
 const browserTimeZone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
+const isoTodayLocal = (): string => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const dueDateTone = (dueDate: string | null): "danger" | "alert" | null => {
+  if (!dueDate) {
+    return null;
+  }
+  const today = new Date(`${isoTodayLocal()}T00:00:00Z`);
+  const due = new Date(`${dueDate}T00:00:00Z`);
+  if (Number.isNaN(today.getTime()) || Number.isNaN(due.getTime())) {
+    return null;
+  }
+  const dayDelta = Math.floor((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+  if (dayDelta <= 0) {
+    return "danger";
+  }
+  if (dayDelta <= 3) {
+    return "alert";
+  }
+  return null;
+};
+
 export function App() {
   const initialPage = typeof window === "undefined" ? "tasks" : pageForPath(window.location.pathname);
   const [sessionChecked, setSessionChecked] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
   const [password, setPassword] = useState("");
   const [passwordError, setPasswordError] = useState<string | null>(null);
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [openTasks, setOpenTasks] = useState<Task[]>([]);
+  const [closedTasks, setClosedTasks] = useState<Task[]>([]);
   const [taskTitle, setTaskTitle] = useState("");
   const [taskNote, setTaskNote] = useState("");
   const [taskTags, setTaskTags] = useState("");
@@ -186,18 +217,18 @@ export function App() {
   const [activePage, setActivePage] = useState<Page>(initialPage);
   const [token, setToken] = useState<string | null>(null);
   const [loadingTasks, setLoadingTasks] = useState(false);
+  const [loadingClosedTasks, setLoadingClosedTasks] = useState(false);
   const [showClosed, setShowClosed] = useState(false);
+  const [closedLoaded, setClosedLoaded] = useState(false);
+  const [analyticsDays, setAnalyticsDays] = useState<AnalyticsWindowDays>(30);
   const [analytics, setAnalytics] = useState<AnalyticsResponse["analytics"] | null>(null);
   const [analyticsError, setAnalyticsError] = useState<string | null>(null);
   const [loadingAnalytics, setLoadingAnalytics] = useState(false);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [copiedToken, setCopiedToken] = useState(false);
 
-  const openTasks = useMemo(() => tasks.filter((task) => task.status === "open"), [tasks]);
-  const doneTasks = useMemo(() => tasks.filter((task) => task.status === "done"), [tasks]);
   const openGroups = useMemo(() => groupTasksByTag(openTasks), [openTasks]);
-  const doneGroups = useMemo(() => groupTasksByTag(doneTasks), [doneTasks]);
-  const analyticsDays = 30;
+  const doneGroups = useMemo(() => groupTasksByTag(closedTasks), [closedTasks]);
   const dailyMetrics = analytics?.daily ?? [];
   const analyticsOwnerBreakdown = analytics?.breakdowns.owner ?? [];
   const analyticsProjectBreakdown = analytics?.breakdowns.project ?? [];
@@ -218,31 +249,35 @@ export function App() {
     setSessionChecked(true);
   };
 
-  const loadTasks = async (): Promise<void> => {
+  const loadOpenTasks = async (): Promise<void> => {
     setLoadingTasks(true);
-    const [openResponse, doneResponse] = await Promise.all([
-      fetch("/ui/api/tasks?status=open&limit=500", { method: "GET" }),
-      fetch("/ui/api/tasks?status=done&limit=500", { method: "GET" })
-    ]);
+    const openResponse = await fetch("/ui/api/tasks?status=open&limit=500", { method: "GET" });
     if (!openResponse.ok) {
       setTaskError(await readError(openResponse));
       setLoadingTasks(false);
       return;
     }
-    if (!doneResponse.ok) {
-      setTaskError(await readError(doneResponse));
-      setLoadingTasks(false);
+    const openPayload = (await openResponse.json()) as TasksResponse;
+
+    setOpenTasks(openPayload.tasks);
+    setTaskError(null);
+    setLoadingTasks(false);
+  };
+
+  const loadClosedTasks = async (): Promise<void> => {
+    setLoadingClosedTasks(true);
+    const response = await fetch("/ui/api/tasks?status=done&limit=500", { method: "GET" });
+    if (!response.ok) {
+      setTaskError(await readError(response));
+      setLoadingClosedTasks(false);
       return;
     }
 
-    const [openPayload, donePayload] = (await Promise.all([
-      openResponse.json(),
-      doneResponse.json()
-    ])) as [TasksResponse, TasksResponse];
-
-    setTasks([...openPayload.tasks, ...donePayload.tasks]);
+    const payload = (await response.json()) as TasksResponse;
+    setClosedTasks(payload.tasks);
+    setClosedLoaded(true);
     setTaskError(null);
-    setLoadingTasks(false);
+    setLoadingClosedTasks(false);
   };
 
   const loadMe = async (): Promise<void> => {
@@ -300,10 +335,23 @@ export function App() {
     if (!authenticated) {
       return;
     }
-    void loadTasks();
-    void loadAnalytics();
+    void loadOpenTasks();
     void loadMe();
   }, [authenticated]);
+
+  useEffect(() => {
+    if (!authenticated) {
+      return;
+    }
+    void loadAnalytics();
+  }, [authenticated, analyticsDays]);
+
+  useEffect(() => {
+    if (!authenticated || !showClosed || closedLoaded) {
+      return;
+    }
+    void loadClosedTasks();
+  }, [authenticated, showClosed, closedLoaded]);
 
   const login = async (): Promise<void> => {
     const response = await fetch("/ui/session", {
@@ -325,7 +373,9 @@ export function App() {
     setAuthenticated(false);
     setTaskError(null);
     setAnalyticsError(null);
-    setTasks([]);
+    setOpenTasks([]);
+    setClosedTasks([]);
+    setClosedLoaded(false);
     setAnalytics(null);
     setCopiedToken(false);
   };
@@ -359,7 +409,10 @@ export function App() {
     setTaskNote("");
     setTaskTags("");
     setTaskDueDate("");
-    await Promise.all([loadTasks(), loadAnalytics()]);
+    await Promise.all([loadOpenTasks(), loadAnalytics()]);
+    if (showClosed) {
+      await loadClosedTasks();
+    }
   };
 
   const completeTask = async (id: string): Promise<void> => {
@@ -368,7 +421,10 @@ export function App() {
       setTaskError(await readError(response));
       return;
     }
-    await Promise.all([loadTasks(), loadAnalytics()]);
+    await Promise.all([loadOpenTasks(), loadAnalytics()]);
+    if (showClosed) {
+      await loadClosedTasks();
+    }
   };
 
   const updateTaskTitle = async (task: Task, title: string): Promise<void> => {
@@ -385,7 +441,10 @@ export function App() {
       setTaskError(await readError(response));
       return;
     }
-    await Promise.all([loadTasks(), loadAnalytics()]);
+    await Promise.all([loadOpenTasks(), loadAnalytics()]);
+    if (showClosed) {
+      await loadClosedTasks();
+    }
   };
 
   const deleteTask = async (id: string): Promise<void> => {
@@ -394,7 +453,10 @@ export function App() {
       setTaskError(await readError(response));
       return;
     }
-    await loadTasks();
+    await loadOpenTasks();
+    if (showClosed) {
+      await loadClosedTasks();
+    }
   };
 
   const ownerOfTask = (task: Task): "agent" | "user" | null => {
@@ -427,6 +489,7 @@ export function App() {
   const renderTaskRow = (task: Task) => {
     const owner = ownerOfTask(task);
     const ownerTitle = owner === "agent" ? "Agent-owned" : owner === "user" ? "User-owned" : "Unknown owner";
+    const dueTone = dueDateTone(task.dueDate);
     return (
       <li className="task-item" key={task.id}>
         <span className="owner-icon" title={ownerTitle}>
@@ -438,7 +501,7 @@ export function App() {
           disabled={task.status === "done"}
           onBlur={(event: ChangeEvent<HTMLInputElement>) => void updateTaskTitle(task, event.currentTarget.value)}
         />
-        <span className="task-meta">{task.dueDate ?? "No due date"}</span>
+        <span className={`task-meta${dueTone ? ` task-meta-${dueTone}` : ""}`}>{task.dueDate ?? "No due date"}</span>
         <div className="task-item-actions">
           {task.status === "open" ? (
             <button className="btn" onClick={() => void completeTask(task.id)}>
@@ -500,8 +563,11 @@ export function App() {
           >
             Analytics
           </button>
-          <button className={`page-button${activePage === "user" ? " is-active" : ""}`} onClick={() => navigateToPage("user")}>
-            User
+          <button
+            className={`page-button${activePage === "settings" ? " is-active" : ""}`}
+            onClick={() => navigateToPage("settings")}
+          >
+            Settings
           </button>
         </aside>
 
@@ -515,7 +581,7 @@ export function App() {
                     <Circle size={10} weight="fill" /> {openTasks.length} open
                   </span>
                   <span>
-                    <CheckCircle size={10} weight="fill" /> {doneTasks.length} closed
+                    <CheckCircle size={10} weight="fill" /> {closedTasks.length} closed
                   </span>
                 </div>
               </header>
@@ -545,7 +611,7 @@ export function App() {
                   value={taskDueDate}
                   onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskDueDate(event.currentTarget.value)}
                 />
-                <button className="btn btn-primary" onClick={() => void createTask()}>
+                <button className="btn" onClick={() => void createTask()}>
                   Add task
                 </button>
               </section>
@@ -562,9 +628,8 @@ export function App() {
                     <header className="tag-head">
                       <span className="tag-label">
                         <Tag size={12} weight="bold" />
-                        {group.tag}
+                        {group.tag} ({group.tasks.length})
                       </span>
-                      <span className="count-badge">{group.tasks.length}</span>
                     </header>
                     <ul className="task-list">{group.tasks.map((task) => renderTaskRow(task))}</ul>
                   </section>
@@ -576,20 +641,20 @@ export function App() {
                 <h2>Closed</h2>
                 <button className="btn" onClick={() => setShowClosed((value) => !value)}>
                   {showClosed ? <CaretDown size={14} weight="bold" /> : <CaretRight size={14} weight="bold" />}
-                  {showClosed ? "Hide" : "Show"} closed ({doneTasks.length})
+                  {showClosed ? "Hide" : "Show"} closed ({closedTasks.length})
                 </button>
               </div>
 
               {showClosed ? (
                 <div className="tag-grid">
+                  {loadingClosedTasks ? <p className="task-meta">Loading closed tasks...</p> : null}
                   {doneGroups.map((group) => (
                     <section className="tag-group tag-group-closed" key={`done-${group.tag}`}>
                       <header className="tag-head">
                         <span className="tag-label">
                           <Tag size={12} weight="bold" />
-                          {group.tag}
+                          {group.tag} ({group.tasks.length})
                         </span>
-                        <span className="count-badge">{group.tasks.length}</span>
                       </header>
                       <ul className="task-list">{group.tasks.map((task) => renderTaskRow(task))}</ul>
                     </section>
@@ -604,6 +669,26 @@ export function App() {
                 <h1 className="title">
                   <ChartBar size={16} weight="fill" /> Analytics ({analyticsDays} days)
                 </h1>
+                <div className="analytics-window-toggle" role="group" aria-label="Analytics time window">
+                  <button
+                    className={`btn${analyticsDays === 1 ? " is-active" : ""}`}
+                    onClick={() => setAnalyticsDays(1)}
+                  >
+                    Last day
+                  </button>
+                  <button
+                    className={`btn${analyticsDays === 7 ? " is-active" : ""}`}
+                    onClick={() => setAnalyticsDays(7)}
+                  >
+                    Last week
+                  </button>
+                  <button
+                    className={`btn${analyticsDays === 30 ? " is-active" : ""}`}
+                    onClick={() => setAnalyticsDays(30)}
+                  >
+                    Last 30 days
+                  </button>
+                </div>
                 {loadingAnalytics ? <span className="task-meta">Loading...</span> : null}
               </header>
               {analytics ? (
@@ -677,7 +762,7 @@ export function App() {
               <div className="breakdown-grid">
                 <section className="panel-subsection">
                   <h2>By owner</h2>
-                  <ul className="breakdown-list">
+                  <ul className="breakdown-list breakdown-list-owner">
                     {analyticsOwnerBreakdown.map((entry) => (
                       <li key={entry.owner}>
                         <span>{entry.owner}</span>
@@ -708,13 +793,19 @@ export function App() {
             </section>
           ) : (
             <section className="panel user-page">
-              <h1 className="title">
-                <UserCircle size={16} weight="fill" /> User token
-              </h1>
+              <header className="section-head">
+                <h1 className="title">
+                  <UserCircle size={16} weight="fill" /> Settings
+                </h1>
+              </header>
+              <p className="task-meta panel-line">
+                Use this token with the `Authorization: Bearer ...` header for CLI and API calls.
+              </p>
+              <p className="task-meta panel-line">Keep it private. If leaked, rotate it from your environment configuration.</p>
               <label className="token-label panel-line" htmlFor="token-field">
                 Bearer token
               </label>
-              <input id="token-field" className="text-input panel-line" value={token ?? ""} readOnly />
+              <input id="token-field" className="text-input panel-line" type="password" value={token ?? ""} readOnly />
               <div className="token-actions">
                 <button className="btn" onClick={() => void copyToken()} disabled={!token}>
                   <ClipboardText size={14} weight="bold" />

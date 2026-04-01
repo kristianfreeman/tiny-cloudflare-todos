@@ -481,10 +481,11 @@ const hasValidUiSession = async (request: Request, env: Env): Promise<boolean> =
 };
 
 const mapAppPathToAssetPath = (pathname: string): string => {
+  const normalizedPath = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
   if (pathname === "/" || pathname === "/index.html") {
     return "/index.html";
   }
-  if (pathname === "/analytics" || pathname === "/user") {
+  if (normalizedPath === "/analytics" || normalizedPath === "/settings" || normalizedPath === "/user") {
     return "/index.html";
   }
   if (pathname.startsWith("/assets/")) {
@@ -1246,6 +1247,22 @@ const analyticsOverview = async (request: Request, env: Env, auth: AuthContext):
   const completionRateInWindow =
     createdInWindow > 0 ? Number((completedInWindow / createdInWindow).toFixed(3)) : 0;
 
+  const sortByHighestTotals = <T extends { openNow: number; createdInWindow: number; completedInWindow: number }>(
+    left: T,
+    right: T
+  ): number => {
+    if (right.openNow !== left.openNow) {
+      return right.openNow - left.openNow;
+    }
+    if (right.createdInWindow !== left.createdInWindow) {
+      return right.createdInWindow - left.createdInWindow;
+    }
+    if (right.completedInWindow !== left.completedInWindow) {
+      return right.completedInWindow - left.completedInWindow;
+    }
+    return 0;
+  };
+
   return json({
     analytics: {
       schemaVersion: "2026-03-27",
@@ -1262,8 +1279,20 @@ const analyticsOverview = async (request: Request, env: Env, auth: AuthContext):
       },
       daily: [...daily.values()],
       breakdowns: {
-        owner: [...ownerBreakdown.values()].sort((left, right) => left.owner.localeCompare(right.owner)),
-        project: [...projectBreakdown.values()].sort((left, right) => left.projectTag.localeCompare(right.projectTag))
+        owner: [...ownerBreakdown.values()].sort((left, right) => {
+          const byTotals = sortByHighestTotals(left, right);
+          if (byTotals !== 0) {
+            return byTotals;
+          }
+          return left.owner.localeCompare(right.owner);
+        }),
+        project: [...projectBreakdown.values()].sort((left, right) => {
+          const byTotals = sortByHighestTotals(left, right);
+          if (byTotals !== 0) {
+            return byTotals;
+          }
+          return left.projectTag.localeCompare(right.projectTag);
+        })
       },
       guidance: {
         definitions: {
@@ -2116,7 +2145,13 @@ const uiApiProxy = async (request: Request, env: Env, requestContext: RequestCon
 
 const handleFetch = async (request: Request, env: Env, requestContext: RequestContext): Promise<Response> => {
   const { pathname } = new URL(request.url);
-  const isUiPageRoute = pathname === "/" || pathname === "/index.html" || pathname === "/analytics" || pathname === "/user";
+  const normalizedPath = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+  const isUiPageRoute =
+    normalizedPath === "/" ||
+    normalizedPath === "/index.html" ||
+    normalizedPath === "/analytics" ||
+    normalizedPath === "/settings" ||
+    normalizedPath === "/user";
 
   if (pathname === "/favicon.ico") {
     return withRequestIdHeader(new Response(null, { status: 204 }), requestContext.requestId);

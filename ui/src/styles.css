@@ -12,6 +12,7 @@
   --accent: #89b6ff;
   --accent-strong: #5c95f0;
   --danger: #ff7878;
+  --alert: #f4c26a;
   --success: #85d197;
   --focus-ring: #6f98d4;
   --weekend-bg: #18212d;
@@ -28,6 +29,7 @@
   --accent: #2259b4;
   --accent-strong: #164799;
   --danger: #b84040;
+  --alert: #996200;
   --success: #1f7f3e;
   --focus-ring: #3b6eb9;
   --weekend-bg: #e6edf5;
@@ -262,6 +264,11 @@ input {
   cursor: pointer;
 }
 
+.btn.is-active {
+  border-color: var(--accent-strong);
+  color: var(--accent-strong);
+}
+
 .btn[disabled] {
   opacity: 0.55;
   cursor: default;
@@ -280,6 +287,14 @@ input {
 .task-meta {
   color: var(--text-muted);
   font-size: 0.95em;
+}
+
+.task-meta-danger {
+  color: var(--danger);
+}
+
+.task-meta-alert {
+  color: var(--alert);
 }
 
 .error-text {
@@ -413,6 +428,12 @@ input {
   align-items: center;
 }
 
+.analytics-window-toggle {
+  display: inline-flex;
+  gap: 0.2rem;
+  flex-wrap: wrap;
+}
+
 .analytics-legend {
   display: inline-flex;
   gap: 0.6rem;
@@ -508,6 +529,11 @@ input {
   padding: 0.35rem 0.6rem 0.5rem 0.6rem;
   display: grid;
   gap: 0.35rem;
+}
+
+.breakdown-list-owner {
+  max-height: 290px;
+  overflow-y: auto;
 }
 
 .breakdown-list li {
