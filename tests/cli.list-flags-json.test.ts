@@ -148,6 +148,83 @@ describe("cli list json and filter flags", () => {
     });
   });
 
+  it("rejects add when explicit project tag does not match cwd without --confirm", async () => {
+    const result = await runCli(["add", "Cross-project", "--tag", "owner:user,project:other"], "http://127.0.0.1:9999", "token");
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("does not match cwd project project:todos");
+    expect(result.stderr).toContain("pass --confirm to override intentionally");
+  });
+
+  it("allows add with cross-project tag when --confirm is provided", async () => {
+    const token = "confirm-token";
+    let seenBody = "";
+
+    const server = createServer((request, response) => {
+      if (request.headers.authorization !== `Bearer ${token}`) {
+        response.statusCode = 401;
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ error: "invalid bearer token" }));
+        return;
+      }
+
+      if (request.method === "POST" && request.url === "/tasks") {
+        request.setEncoding("utf8");
+        request.on("data", (chunk) => {
+          seenBody += chunk;
+        });
+        request.on("end", () => {
+          response.statusCode = 201;
+          response.setHeader("content-type", "application/json");
+          response.end(
+            JSON.stringify({
+              task: {
+                id: "task-confirmed",
+                title: "Cross-project",
+                note: null,
+                tags: ["owner:user", "project:other"],
+                status: "open",
+                dueDate: null,
+                recurrenceRuleId: null,
+                createdAt: "2026-03-01T00:00:00.000Z",
+                updatedAt: "2026-03-01T00:00:00.000Z",
+                completedAt: null
+              }
+            })
+          );
+        });
+        return;
+      }
+
+      response.statusCode = 404;
+      response.end();
+    });
+
+    servers.push(server);
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("failed to determine mock API port");
+    }
+
+    const result = await runCli(
+      ["add", "Cross-project", "--tag", "owner:user,project:other", "--confirm"],
+      `http://127.0.0.1:${String(address.port)}`,
+      token
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Created task task-confirmed");
+    expect(JSON.parse(seenBody)).toEqual({
+      title: "Cross-project",
+      tags: ["owner:user", "project:other"]
+    });
+  });
+
   it("rejects invalid due-before date format", async () => {
     const result = await runCli(["list", "--due-before", "03-01-2026"], "http://127.0.0.1:9999", "token");
 

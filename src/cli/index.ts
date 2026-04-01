@@ -20,18 +20,12 @@ interface ListFilterOptions {
   tag?: string;
 }
 
-interface KimakiProject {
-  directory: string;
-  folder_name: string | undefined;
-  channel_name: string | undefined;
-}
-
 const usage = `
 tiny-todo CLI
 
 Commands:
-  add <title> [--note <text>] [--due YYYY-MM-DD] [--tag <tag[,tag...]>]
-  edit <task-id> [--title <text>] [--note <text>] [--clear-note] [--due YYYY-MM-DD|none] [--status open|done] [--list-id <id>] [--tag <tag[,tag...]>]
+  add <title> [--note <text>] [--due YYYY-MM-DD] [--tag <tag[,tag...]>] [--confirm]
+  edit <task-id> [--title <text>] [--note <text>] [--clear-note] [--due YYYY-MM-DD|none] [--status open|done] [--list-id <id>] [--tag <tag[,tag...]>] [--confirm]
   note <task-id> <text...> [--clear]
   project-tag [--cwd <path>] [--json]
   list [--status open|done|all] [--list-id <id>] [--due-before YYYY-MM-DD] [--due-after YYYY-MM-DD] [--search <text>] [--sort <field>] [--tag <tag[,tag...]>] [--json]
@@ -171,35 +165,6 @@ const slugFromName = (value: string): string => {
 
 const tagProject = (slug: string): string => `project:${slug}`;
 
-const readKimakiProjects = (): KimakiProject[] => {
-  try {
-    const output = execFileSync("kimaki", ["project", "list", "--json"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 3000
-    });
-    const parsed = JSON.parse(output) as unknown;
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    return parsed
-      .filter((entry): entry is KimakiProject => {
-        if (!entry || typeof entry !== "object") {
-          return false;
-        }
-        const maybeDirectory = (entry as { directory?: unknown }).directory;
-        return typeof maybeDirectory === "string" && maybeDirectory.length > 0;
-      })
-      .map((entry) => ({
-        directory: normalizePath(entry.directory),
-        folder_name: typeof entry.folder_name === "string" ? entry.folder_name : undefined,
-        channel_name: typeof entry.channel_name === "string" ? entry.channel_name : undefined
-      }));
-  } catch {
-    return [];
-  }
-};
-
 const resolveGitRoot = (cwd: string): string | undefined => {
   try {
     const output = execFileSync("git", ["rev-parse", "--show-toplevel"], {
@@ -223,44 +188,29 @@ const inferProjectTagForCwd = (cwdValue?: string): string => {
     return explicitProjectTag;
   }
 
-  const projects = readKimakiProjects();
-  if (projects.length > 0) {
-    const exact = projects.find((project) => project.directory === root || project.directory === cwd);
-    if (exact) {
-      return tagProject(slugFromName(exact.folder_name ?? path.basename(exact.directory)));
-    }
-
-    const parentCandidates = projects.filter((project) => {
-      const prefix = `${project.directory}${path.sep}`;
-      return root.startsWith(prefix) || cwd.startsWith(prefix);
-    });
-    if (parentCandidates.length > 0) {
-      const nearest = parentCandidates.sort((a, b) => b.directory.length - a.directory.length)[0];
-      if (nearest) {
-        return tagProject(slugFromName(nearest.folder_name ?? path.basename(nearest.directory)));
-      }
-    }
-
-    const rootName = path.basename(root).toLowerCase();
-    const cwdName = path.basename(cwd).toLowerCase();
-    const fallback = projects.find((project) => {
-      const projectName = (project.folder_name ?? path.basename(project.directory)).toLowerCase();
-      return projectName === rootName || projectName === cwdName;
-    });
-    if (fallback) {
-      return tagProject(slugFromName(fallback.folder_name ?? path.basename(fallback.directory)));
-    }
-  }
-
   return tagProject(slugFromName(path.basename(root)));
 };
 
-const withInferredProjectTag = (tags: string[] | undefined, cwdValue?: string): string[] => {
+const withInferredProjectTag = (
+  tags: string[] | undefined,
+  options: ParsedArgs["options"],
+  cwdValue?: string
+): string[] => {
   const normalized = [...new Set((tags ?? []).map((tag) => tag.trim().toLowerCase()).filter((tag) => tag.length > 0))];
   const projectTags = normalized.filter((tag) => /^project:[a-z0-9][a-z0-9-]*$/.test(tag));
+  const inferredProjectTag = inferProjectTagForCwd(cwdValue);
+
   if (projectTags.length === 0) {
-    normalized.push(inferProjectTagForCwd(cwdValue));
+    normalized.push(inferredProjectTag);
+    return normalized;
   }
+
+  if (projectTags.length === 1 && projectTags[0] !== inferredProjectTag && !optionFlag(options, "confirm")) {
+    throw new Error(
+      `project tag ${projectTags[0]} does not match cwd project ${inferredProjectTag}; pass --confirm to override intentionally`
+    );
+  }
+
   return normalized;
 };
 
@@ -465,7 +415,7 @@ const main = async (): Promise<void> => {
 
     const note = typeof parsed.options.note === "string" ? parsed.options.note : undefined;
     const due = typeof parsed.options.due === "string" ? parsed.options.due : undefined;
-    const tags = withInferredProjectTag(parseTagsOption(optionString(parsed.options, "tag")));
+    const tags = withInferredProjectTag(parseTagsOption(optionString(parsed.options, "tag")), parsed.options);
     if (due && !isIsoDate(due)) {
       throw new Error("--due must be YYYY-MM-DD");
     }
@@ -611,7 +561,7 @@ const main = async (): Promise<void> => {
 
     const tags = parseTagsOption(optionString(parsed.options, "tag"));
     if (tags !== undefined) {
-      payload.tags = withInferredProjectTag(tags);
+      payload.tags = withInferredProjectTag(tags, parsed.options);
     }
 
     if (Object.keys(payload).length === 0) {
