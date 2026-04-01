@@ -803,6 +803,46 @@ describe("worker integration", () => {
     expect(createdAscBody.tasks.map((task) => task.title)).toEqual(["First", "Second", "Third"]);
   });
 
+  it("returns pagination metadata and supports completed_at_desc for done tasks", async () => {
+    const context = await newContext();
+
+    const first = await createTask(context, { title: "First done" });
+    await apiRequest(context, `/tasks/${encodeURIComponent(first.id)}/complete`, { method: "POST" });
+    const second = await createTask(context, { title: "Second done" });
+    await apiRequest(context, `/tasks/${encodeURIComponent(second.id)}/complete`, { method: "POST" });
+    const third = await createTask(context, { title: "Third done" });
+    await apiRequest(context, `/tasks/${encodeURIComponent(third.id)}/complete`, { method: "POST" });
+
+    const firstPageResponse = await apiRequest(
+      context,
+      "/tasks?status=done&sort=completed_at_desc&limit=2&offset=0",
+      { method: "GET" }
+    );
+    expect(firstPageResponse.status).toBe(200);
+    const firstPageBody = await readJson<{
+      tasks: Array<{ id: string; title: string }>;
+      total: number;
+      limit: number;
+      offset: number;
+      hasMore: boolean;
+    }>(firstPageResponse);
+    expect(firstPageBody.tasks.map((task) => task.title)).toEqual(["Third done", "Second done"]);
+    expect(firstPageBody.total).toBe(3);
+    expect(firstPageBody.limit).toBe(2);
+    expect(firstPageBody.offset).toBe(0);
+    expect(firstPageBody.hasMore).toBe(true);
+
+    const secondPageResponse = await apiRequest(
+      context,
+      "/tasks?status=done&sort=completed_at_desc&limit=2&offset=2",
+      { method: "GET" }
+    );
+    expect(secondPageResponse.status).toBe(200);
+    const secondPageBody = await readJson<{ tasks: Array<{ title: string }>; hasMore: boolean }>(secondPageResponse);
+    expect(secondPageBody.tasks.map((task) => task.title)).toEqual(["First done"]);
+    expect(secondPageBody.hasMore).toBe(false);
+  });
+
   it("combines status, search, list_id, date window, sort, limit, and offset", async () => {
     const context = await newContext();
     const workListId = await createList(context, "Work");

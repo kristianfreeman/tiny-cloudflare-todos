@@ -43,3 +43,9 @@
 - `bin/tiny-todo` launches CLI with `npm --prefix`, so CLI must read `TINY_TODO_CALLER_CWD` (forwarded from wrapper `$PWD`) to infer project tags from caller location instead of repo path.
 - Historical tasks created before strict tag validation can carry invalid project tags (for example dots/underscores) or multiple project tags; cleanup requires bulk retagging through API patch.
 - For cleanup scripts, if only tags change, include `status` in patch payload to bypass Worker `no updates provided` guard that otherwise ignores tag-only updates.
+
+## Closed Task Count Accuracy Requires API Totals, Not Client List Length
+
+- If UI fetches done tasks with a hard `limit`, header counts based on `closedTasks.length` cap at that limit and appear stuck (for example always 500).
+- `/tasks` should return pagination metadata (`total`, `limit`, `offset`, `hasMore`) so UI can show true totals while rendering only the latest page.
+- For closed-task recency views, use a completion-based sort (`completed_at_desc`) rather than default due-date sorting.

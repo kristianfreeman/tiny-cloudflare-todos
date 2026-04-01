@@ -46,7 +46,13 @@ export interface UpdateTaskInput {
   status?: TaskStatus;
 }
 
-export type TaskSort = "default" | "due_date_asc" | "due_date_desc" | "created_at_asc" | "created_at_desc";
+export type TaskSort =
+  | "default"
+  | "due_date_asc"
+  | "due_date_desc"
+  | "created_at_asc"
+  | "created_at_desc"
+  | "completed_at_desc";
 
 export interface ListTasksQuery {
   status?: "open" | "done" | "all";
@@ -95,6 +101,10 @@ export interface TaskDTO {
 
 export interface ListTasksResponse {
   tasks: TaskDTO[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
 }
 
 export interface RecurrenceRuleDTO {

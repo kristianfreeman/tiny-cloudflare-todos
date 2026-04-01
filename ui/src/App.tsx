@@ -13,6 +13,10 @@ interface Task {
 
 interface TasksResponse {
   tasks: Task[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
 }
 
 interface TaskGroup {
@@ -169,6 +173,7 @@ const browserTimeZone = (): string => Intl.DateTimeFormat().resolvedOptions().ti
 const ACTIVE_POLL_INTERVAL_MS = 10_000;
 const IDLE_POLL_INTERVAL_MS = 120_000;
 const ACTIVE_INTERACTION_WINDOW_MS = 20_000;
+const CLOSED_PAGE_SIZE = 100;
 
 const isoTodayLocal = (): string => {
   const now = new Date();
@@ -216,6 +221,8 @@ export function App() {
   const [loadingClosedTasks, setLoadingClosedTasks] = useState(false);
   const [showClosed, setShowClosed] = useState(false);
   const [closedLoaded, setClosedLoaded] = useState(false);
+  const [closedTotalCount, setClosedTotalCount] = useState(0);
+  const [closedHasMore, setClosedHasMore] = useState(false);
   const [analyticsDays, setAnalyticsDays] = useState<AnalyticsWindowDays>(30);
   const [analytics, setAnalytics] = useState<AnalyticsResponse["analytics"] | null>(null);
   const [analyticsError, setAnalyticsError] = useState<string | null>(null);
@@ -268,11 +275,15 @@ export function App() {
     }
   };
 
-  const loadClosedTasks = async (options?: { silent?: boolean }): Promise<void> => {
+  const loadClosedTasks = async (options?: { silent?: boolean; offset?: number; append?: boolean }): Promise<void> => {
+    const offset = options?.offset ?? 0;
     if (!options?.silent) {
       setLoadingClosedTasks(true);
     }
-    const response = await fetch("/ui/api/tasks?status=done&limit=500", { method: "GET" });
+    const response = await fetch(
+      `/ui/api/tasks?status=done&sort=completed_at_desc&limit=${CLOSED_PAGE_SIZE}&offset=${offset}`,
+      { method: "GET" }
+    );
     if (!response.ok) {
       setTaskError(await readError(response));
       if (!options?.silent) {
@@ -282,12 +293,21 @@ export function App() {
     }
 
     const payload = (await response.json()) as TasksResponse;
-    setClosedTasks(payload.tasks);
+    setClosedTasks((previous) => (options?.append ? [...previous, ...payload.tasks] : payload.tasks));
+    setClosedTotalCount(payload.total);
+    setClosedHasMore(payload.hasMore);
     setClosedLoaded(true);
     setTaskError(null);
     if (!options?.silent) {
       setLoadingClosedTasks(false);
     }
+  };
+
+  const loadMoreClosedTasks = async (): Promise<void> => {
+    if (loadingClosedTasks || !closedHasMore) {
+      return;
+    }
+    await loadClosedTasks({ offset: closedTasks.length, append: true });
   };
 
   const loadMe = async (): Promise<void> => {
@@ -488,6 +508,8 @@ export function App() {
     setOpenTasks([]);
     setClosedTasks([]);
     setClosedLoaded(false);
+    setClosedTotalCount(0);
+    setClosedHasMore(false);
     setAnalytics(null);
     setCopiedToken(false);
   };
@@ -691,7 +713,7 @@ export function App() {
                     {openTasks.length} open
                   </span>
                   <span>
-                    {closedLoaded ? `${closedTasks.length} closed` : "closed not loaded"}
+                    {closedLoaded ? `${closedTotalCount} closed` : "closed not loaded"}
                   </span>
                 </div>
               </header>
@@ -750,13 +772,14 @@ export function App() {
                 <h2>Closed</h2>
                 <button className="btn" onClick={() => setShowClosed((value) => !value)}>
                   {showClosed ? "Hide" : "Show"}
-                  {closedLoaded ? ` closed (${closedTasks.length})` : " closed"}
+                  {closedLoaded ? ` closed (${closedTotalCount})` : " closed"}
                 </button>
               </div>
 
               {showClosed ? (
                 <div className="tag-grid">
                   {loadingClosedTasks ? <p className="task-meta">Loading closed tasks...</p> : null}
+                  {closedLoaded ? <p className="task-meta">Showing {closedTasks.length} of {closedTotalCount} closed tasks.</p> : null}
                   {doneGroups.map((group) => (
                     <section className="tag-group tag-group-closed" key={`done-${group.tag}`}>
                       <header className="tag-head">
@@ -768,6 +791,11 @@ export function App() {
                     </section>
                   ))}
                   {doneGroups.length === 0 ? <p className="task-meta">No closed tasks.</p> : null}
+                  {closedHasMore ? (
+                    <button className="btn" onClick={() => void loadMoreClosedTasks()} disabled={loadingClosedTasks}>
+                      {loadingClosedTasks ? "Loading..." : "Load more closed"}
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
             </section>

@@ -73,7 +73,14 @@ const LIST_ROLE_RANK: Record<ListRole, number> = {
   editor: 2,
   viewer: 1
 };
-const TASK_SORTS: readonly TaskSort[] = ["default", "due_date_asc", "due_date_desc", "created_at_asc", "created_at_desc"];
+const TASK_SORTS: readonly TaskSort[] = [
+  "default",
+  "due_date_asc",
+  "due_date_desc",
+  "created_at_asc",
+  "created_at_desc",
+  "completed_at_desc"
+];
 const UI_SESSION_COOKIE = "tiny_todo_ui_session";
 const UI_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
 const ANALYTICS_THROUGHPUT_START_DATE = "2026-03-24";
@@ -977,7 +984,7 @@ const listTasks = async (request: Request, env: Env, auth: AuthContext): Promise
   }
 
   if (allowedListIds.length === 0) {
-    return json({ tasks: [] });
+    return json({ tasks: [], total: 0, limit: safeLimit, offset: safeOffset, hasMore: false } satisfies ListTasksResponse);
   }
 
   const filters: SQL[] = [inArray(tasks.listId, allowedListIds)];
@@ -1024,7 +1031,15 @@ const listTasks = async (request: Request, env: Env, auth: AuthContext): Promise
           ? [desc(tasks.dueDate), desc(tasks.createdAt), desc(tasks.id)]
           : sort === "created_at_asc"
             ? [asc(tasks.createdAt), asc(tasks.id)]
-            : [desc(tasks.createdAt), desc(tasks.id)];
+            : sort === "created_at_desc"
+              ? [desc(tasks.createdAt), desc(tasks.id)]
+              : [desc(tasks.completedAt), desc(tasks.updatedAt), desc(tasks.id)];
+
+  const totalRows = await db
+    .select({ total: sql<number>`count(*)` })
+    .from(tasks)
+    .where(and(...filters));
+  const total = Number(totalRows[0]?.total ?? 0);
 
   const rows = await db
     .select()
@@ -1039,7 +1054,13 @@ const listTasks = async (request: Request, env: Env, auth: AuthContext): Promise
     rows.map((row) => row.id)
   );
 
-  return json({ tasks: rows.map((row) => mapTask(row, tagsByTaskId.get(row.id) ?? [])) } satisfies ListTasksResponse);
+  return json({
+    tasks: rows.map((row) => mapTask(row, tagsByTaskId.get(row.id) ?? [])),
+    total,
+    limit: safeLimit,
+    offset: safeOffset,
+    hasMore: safeOffset + rows.length < total
+  } satisfies ListTasksResponse);
 };
 
 const analyticsOverview = async (request: Request, env: Env, auth: AuthContext): Promise<Response> => {
