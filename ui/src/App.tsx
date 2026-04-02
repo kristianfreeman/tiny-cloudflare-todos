@@ -229,8 +229,11 @@ export function App() {
   const [loadingAnalytics, setLoadingAnalytics] = useState(false);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [copiedToken, setCopiedToken] = useState(false);
+  const [idRevealActive, setIdRevealActive] = useState(false);
+  const [copiedTaskId, setCopiedTaskId] = useState<string | null>(null);
   const lastInteractionAtRef = useRef<number>(Date.now());
   const changesCursorRef = useRef<string | null>(null);
+  const copiedTaskIdTimerRef = useRef<number | null>(null);
 
   const openGroups = useMemo(() => groupTasksByTag(openTasks), [openTasks]);
   const doneGroups = useMemo(() => groupTasksByTag(closedTasks), [closedTasks]);
@@ -374,6 +377,39 @@ export function App() {
     document.documentElement.setAttribute("data-theme", theme);
     window.localStorage.setItem("tiny-todo-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Shift" && !hasFocusedEditable()) {
+        setIdRevealActive(true);
+      }
+    };
+    const onKeyUp = (event: KeyboardEvent): void => {
+      if (event.key === "Shift") {
+        setIdRevealActive(false);
+      }
+    };
+    const clearReveal = (): void => setIdRevealActive(false);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", clearReveal);
+    document.addEventListener("visibilitychange", clearReveal);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", clearReveal);
+      document.removeEventListener("visibilitychange", clearReveal);
+    };
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (copiedTaskIdTimerRef.current !== null) {
+        window.clearTimeout(copiedTaskIdTimerRef.current);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     const onPopState = (): void => {
@@ -612,6 +648,21 @@ export function App() {
     setTimeout(() => setCopiedToken(false), 1200);
   };
 
+  const copyTaskId = async (id: string): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(id);
+      setCopiedTaskId(id);
+      if (copiedTaskIdTimerRef.current !== null) {
+        window.clearTimeout(copiedTaskIdTimerRef.current);
+      }
+      copiedTaskIdTimerRef.current = window.setTimeout(() => {
+        setCopiedTaskId(null);
+      }, 1200);
+    } catch {
+      setTaskError("Could not copy task ID. Check clipboard permissions.");
+    }
+  };
+
   const navigateToPage = (page: Page): void => {
     setActivePage(page);
     const nextPath = pathForPage(page);
@@ -627,12 +678,18 @@ export function App() {
     return (
       <li className="task-item" key={task.id}>
         <div className="task-title-wrap">
-          <input
-            className="text-input"
-            defaultValue={task.title}
-            disabled={task.status === "done"}
-            onBlur={(event: ChangeEvent<HTMLInputElement>) => void updateTaskTitle(task, event.currentTarget.value)}
-          />
+          {idRevealActive ? (
+            <button className="task-id-copy" type="button" onClick={() => void copyTaskId(task.id)} title={`Copy ${task.id}`}>
+              {task.id}
+            </button>
+          ) : (
+            <input
+              className="text-input"
+              defaultValue={task.title}
+              disabled={task.status === "done"}
+              onBlur={(event: ChangeEvent<HTMLInputElement>) => void updateTaskTitle(task, event.currentTarget.value)}
+            />
+          )}
           <em className="task-owner-label">{ownerLabel}</em>
         </div>
         <span className={`task-meta${dueTone ? ` task-meta-${dueTone}` : ""}`}>{task.dueDate ?? "No due date"}</span>
@@ -750,7 +807,11 @@ export function App() {
 
               <div className="section-head">
                 <h2>Open</h2>
-                {loadingTasks ? <span className="task-meta">Loading...</span> : null}
+                <div className="task-id-hint">
+                  <span className="task-meta">Hold Shift to reveal IDs and click to copy.</span>
+                  {copiedTaskId ? <span className="task-meta task-meta-success">Copied {copiedTaskId}</span> : null}
+                  {loadingTasks ? <span className="task-meta">Loading...</span> : null}
+                </div>
               </div>
               {taskError ? <p className="error-text">{taskError}</p> : null}
 

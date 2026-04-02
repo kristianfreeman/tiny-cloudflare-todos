@@ -293,6 +293,10 @@ input {
   color: var(--alert);
 }
 
+.task-meta-success {
+  color: var(--success);
+}
+
 .error-text {
   color: var(--danger);
   font-weight: 600;
@@ -371,6 +375,33 @@ input {
 .task-title-wrap .text-input {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+.task-id-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  min-height: 1.7rem;
+  padding: 0.2rem 0.3rem;
+  text-align: left;
+  color: var(--accent);
+  cursor: copy;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-id-copy:hover {
+  text-decoration: underline;
+}
+
+.task-id-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
 .task-owner-label {
