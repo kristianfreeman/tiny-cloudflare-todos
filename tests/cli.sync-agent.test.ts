@@ -210,8 +210,8 @@ describe("sync-agent integration", () => {
 - task-done | Finished | done:2026-02-20T09:10:11.000Z
 
 ## Recurrence Rules
-- rule-a | Rule A | cadence:daily | interval:2 | weekdays:none | timezone:UTC | skip:none | next:2026-03-01
-- rule-b | Rule B | cadence:weekly | interval:1 | weekdays:1,3,5 | timezone:UTC | skip:none | next:2026-03-02
+- rule-a | Rule A | cadence:daily | interval:2 | weekdays:none | dayOfMonth:none | timezone:UTC | skip:none | next:2026-03-01
+- rule-b | Rule B | cadence:weekly | interval:1 | weekdays:1,3,5 | dayOfMonth:none | timezone:UTC | skip:none | next:2026-03-02
 `);
   });
 });

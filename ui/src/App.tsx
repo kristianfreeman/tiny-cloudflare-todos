@@ -11,12 +11,36 @@ interface Task {
   completedAt: string | null;
 }
 
+interface RecurrenceRule {
+  id: string;
+  listId: string;
+  titleTemplate: string;
+  noteTemplate: string | null;
+  cadence: "daily" | "weekly" | "monthly";
+  interval: number;
+  weekdays: number[] | null;
+  dayOfMonth: number | null;
+  timezone: string;
+  anchorDate: string;
+  nextRunDate: string;
+  exceptionDates: string[] | null;
+  generationPolicy: "calendar" | "completion";
+  tags: string[];
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface TasksResponse {
   tasks: Task[];
   total: number;
   limit: number;
   offset: number;
   hasMore: boolean;
+}
+
+interface RecurrenceRulesResponse {
+  recurrenceRules: RecurrenceRule[];
 }
 
 interface TaskGroup {
@@ -78,11 +102,17 @@ interface ChangesResponse {
   };
 }
 
-type Page = "tasks" | "analytics" | "settings";
+type Page = "new-task" | "recurring" | "tasks" | "analytics" | "settings";
 
 type AnalyticsWindowDays = 1 | 7 | 30;
 
 const pathForPage = (page: Page): string => {
+  if (page === "new-task") {
+    return "/new";
+  }
+  if (page === "recurring") {
+    return "/recurring";
+  }
   if (page === "analytics") {
     return "/analytics";
   }
@@ -94,6 +124,12 @@ const pathForPage = (page: Page): string => {
 
 const pageForPath = (pathname: string): Page => {
   const normalizedPath = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+  if (normalizedPath === "/new") {
+    return "new-task";
+  }
+  if (normalizedPath === "/recurring") {
+    return "recurring";
+  }
   if (normalizedPath === "/analytics") {
     return "analytics";
   }
@@ -174,6 +210,7 @@ const ACTIVE_POLL_INTERVAL_MS = 10_000;
 const IDLE_POLL_INTERVAL_MS = 120_000;
 const ACTIVE_INTERACTION_WINDOW_MS = 20_000;
 const CLOSED_PAGE_SIZE = 100;
+const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 const isoTodayLocal = (): string => {
   const now = new Date();
@@ -215,6 +252,19 @@ export function App() {
   const [taskTags, setTaskTags] = useState("");
   const [taskDueDate, setTaskDueDate] = useState("");
   const [taskError, setTaskError] = useState<string | null>(null);
+  const [recurrenceRules, setRecurrenceRules] = useState<RecurrenceRule[]>([]);
+  const [recurrenceTitle, setRecurrenceTitle] = useState("");
+  const [recurrenceCadence, setRecurrenceCadence] = useState<"daily" | "weekly" | "monthly">("daily");
+  const [recurrencePolicy, setRecurrencePolicy] = useState<"calendar" | "completion">("completion");
+  const [recurrenceInterval, setRecurrenceInterval] = useState("1");
+  const [recurrenceWeekdays, setRecurrenceWeekdays] = useState("");
+  const [recurrenceDayOfMonth, setRecurrenceDayOfMonth] = useState("");
+  const [recurrenceTimezone, setRecurrenceTimezone] = useState(browserTimeZone());
+  const [recurrenceSkipDates, setRecurrenceSkipDates] = useState("");
+  const [recurrenceTags, setRecurrenceTags] = useState("owner:user,project:general");
+  const [recurrenceAdvanced, setRecurrenceAdvanced] = useState(false);
+  const [recurrenceError, setRecurrenceError] = useState<string | null>(null);
+  const [loadingRecurrenceRules, setLoadingRecurrenceRules] = useState(false);
   const [activePage, setActivePage] = useState<Page>(initialPage);
   const [token, setToken] = useState<string | null>(null);
   const [loadingTasks, setLoadingTasks] = useState(false);
@@ -275,6 +325,27 @@ export function App() {
     setTaskError(null);
     if (!options?.silent) {
       setLoadingTasks(false);
+    }
+  };
+
+  const loadRecurrenceRules = async (options?: { silent?: boolean }): Promise<void> => {
+    if (!options?.silent) {
+      setLoadingRecurrenceRules(true);
+    }
+    const response = await fetch("/ui/api/recurrence-rules?active=all", { method: "GET" });
+    if (!response.ok) {
+      setRecurrenceError(await readError(response));
+      if (!options?.silent) {
+        setLoadingRecurrenceRules(false);
+      }
+      return;
+    }
+
+    const payload = (await response.json()) as RecurrenceRulesResponse;
+    setRecurrenceRules(payload.recurrenceRules);
+    setRecurrenceError(null);
+    if (!options?.silent) {
+      setLoadingRecurrenceRules(false);
     }
   };
 
@@ -361,6 +432,7 @@ export function App() {
   const refreshVisibleData = async (): Promise<void> => {
     await Promise.all([
       loadOpenTasks({ silent: true }),
+      loadRecurrenceRules({ silent: true }),
       loadAnalytics({ silent: true }),
       showClosed ? loadClosedTasks({ silent: true }) : Promise.resolve()
     ]);
@@ -428,6 +500,7 @@ export function App() {
       return;
     }
     void loadOpenTasks();
+    void loadRecurrenceRules();
     void loadMe();
   }, [authenticated]);
 
@@ -547,6 +620,7 @@ export function App() {
     setClosedTotalCount(0);
     setClosedHasMore(false);
     setAnalytics(null);
+    setRecurrenceRules([]);
     setCopiedToken(false);
   };
 
@@ -583,6 +657,98 @@ export function App() {
     if (showClosed) {
       await loadClosedTasks();
     }
+  };
+
+  const createRecurrenceRule = async (): Promise<void> => {
+    const titleTemplate = recurrenceTitle.trim();
+    if (!titleTemplate) {
+      setRecurrenceError("Recurring title is required.");
+      return;
+    }
+
+    const intervalRaw = Number(recurrenceInterval);
+    if (!Number.isInteger(intervalRaw) || intervalRaw < 1) {
+      setRecurrenceError("Interval must be a positive integer.");
+      return;
+    }
+
+    const payload: Record<string, unknown> = {
+      titleTemplate,
+      cadence: recurrenceCadence,
+      interval: intervalRaw,
+      generationPolicy: recurrencePolicy,
+      timezone: recurrenceTimezone.trim() || browserTimeZone()
+    };
+
+    const recurrenceTagValues = recurrenceTags
+      .split(",")
+      .map((value) => value.trim().toLowerCase())
+      .filter((value) => value.length > 0);
+    if (recurrenceTagValues.length > 0) {
+      payload.tags = recurrenceTagValues;
+    }
+
+    if (recurrenceCadence === "weekly") {
+      const weekdays = recurrenceWeekdays
+        .split(",")
+        .map((value) => Number(value.trim()))
+        .filter((value) => Number.isInteger(value) && value >= 0 && value <= 6);
+      if (weekdays.length > 0) {
+        payload.weekdays = weekdays;
+      }
+    }
+
+    if (recurrenceCadence === "monthly") {
+      const dayRaw = recurrenceDayOfMonth.trim();
+      if (dayRaw.length > 0) {
+        const day = Number(dayRaw);
+        if (!Number.isInteger(day) || day < 1 || day > 31) {
+          setRecurrenceError("Day of month must be an integer between 1 and 31.");
+          return;
+        }
+        payload.dayOfMonth = day;
+      }
+    }
+
+    const exceptionDates = recurrenceSkipDates
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+    if (exceptionDates.length > 0) {
+      payload.exceptionDates = exceptionDates;
+    }
+
+    const response = await fetch("/ui/api/recurrence-rules", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      setRecurrenceError(await readError(response));
+      return;
+    }
+
+    setRecurrenceTitle("");
+    setRecurrenceInterval("1");
+    setRecurrenceWeekdays("");
+    setRecurrenceDayOfMonth("");
+    setRecurrenceSkipDates("");
+    setRecurrencePolicy("completion");
+    setRecurrenceError(null);
+    await Promise.all([loadRecurrenceRules(), loadOpenTasks()]);
+  };
+
+  const toggleRecurrenceRule = async (rule: RecurrenceRule): Promise<void> => {
+    const response = await fetch(`/ui/api/recurrence-rules/${encodeURIComponent(rule.id)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ active: !rule.active })
+    });
+    if (!response.ok) {
+      setRecurrenceError(await readError(response));
+      return;
+    }
+    await loadRecurrenceRules();
   };
 
   const completeTask = async (id: string): Promise<void> => {
@@ -671,6 +837,18 @@ export function App() {
     }
   };
 
+  const recurrenceSummary = (rule: RecurrenceRule): string => {
+    const every = `every ${rule.interval} ${rule.cadence}${rule.interval === 1 ? "" : "s"}`;
+    if (rule.cadence === "weekly" && rule.weekdays && rule.weekdays.length > 0) {
+      const labels = rule.weekdays.map((day) => WEEKDAY_LABELS[day] ?? String(day)).join(",");
+      return `${every} on ${labels}`;
+    }
+    if (rule.cadence === "monthly" && rule.dayOfMonth) {
+      return `${every} on day ${rule.dayOfMonth}`;
+    }
+    return every;
+  };
+
   const renderTaskRow = (task: Task) => {
     const owner = ownerOfTask(task);
     const ownerLabel = owner === "agent" ? "agent" : "user";
@@ -743,6 +921,12 @@ export function App() {
     <main className="app-shell">
       <div className="app-layout">
         <aside className="page-nav" aria-label="Pages">
+          <button className={`page-button${activePage === "new-task" ? " is-active" : ""}`} onClick={() => navigateToPage("new-task")}>
+            New task
+          </button>
+          <button className={`page-button${activePage === "recurring" ? " is-active" : ""}`} onClick={() => navigateToPage("recurring")}>
+            Recurring
+          </button>
           <button className={`page-button${activePage === "tasks" ? " is-active" : ""}`} onClick={() => navigateToPage("tasks")}>
             Tasks
           </button>
@@ -761,20 +945,23 @@ export function App() {
         </aside>
 
         <section className="page-content">
-          {activePage === "tasks" ? (
+          {activePage === "tasks" || activePage === "new-task" || activePage === "recurring" ? (
             <section className="panel tasks-page">
               <header className="section-head">
-                <h1 className="title">Operations</h1>
-                <div className="stats-inline">
-                  <span>
-                    {openTasks.length} open
-                  </span>
-                  <span>
-                    {closedLoaded ? `${closedTotalCount} closed` : "closed not loaded"}
-                  </span>
-                </div>
+                <h1 className="title">{activePage === "new-task" ? "New Task" : activePage === "recurring" ? "Recurring" : "Tasks"}</h1>
+                {activePage === "tasks" ? (
+                  <div className="stats-inline">
+                    <span>
+                      {openTasks.length} open
+                    </span>
+                    <span>
+                      {closedLoaded ? `${closedTotalCount} closed` : "closed not loaded"}
+                    </span>
+                  </div>
+                ) : null}
               </header>
 
+              {activePage === "new-task" ? (
               <section className="task-create-grid" aria-label="Create task">
                 <input
                   className="text-input"
@@ -804,7 +991,117 @@ export function App() {
                   Add task
                 </button>
               </section>
+              ) : null}
 
+              {activePage === "recurring" ? (
+              <>
+              <div className="section-head">
+                <h2>Recurring</h2>
+                <div className="task-id-hint">
+                  <button className={`btn${recurrenceAdvanced ? " is-active" : ""}`} onClick={() => setRecurrenceAdvanced((value) => !value)}>
+                    {recurrenceAdvanced ? "Hide advanced" : "Show advanced"}
+                  </button>
+                  {loadingRecurrenceRules ? <span className="task-meta">Loading...</span> : null}
+                  <span className="task-meta">Calendar schedule (not completion-based).</span>
+                </div>
+              </div>
+              <section className="recurrence-create-grid" aria-label="Create recurrence rule">
+                <input
+                  className="text-input"
+                  placeholder="Recurring title"
+                  value={recurrenceTitle}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => setRecurrenceTitle(event.currentTarget.value)}
+                />
+                <select
+                  className="text-input"
+                  value={recurrenceCadence}
+                  onChange={(event: ChangeEvent<HTMLSelectElement>) => setRecurrenceCadence(event.currentTarget.value as "daily" | "weekly" | "monthly")}
+                >
+                  <option value="daily">daily</option>
+                  <option value="weekly">weekly</option>
+                  <option value="monthly">monthly</option>
+                </select>
+                <input
+                  className="text-input"
+                  value={recurrenceInterval}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => setRecurrenceInterval(event.currentTarget.value)}
+                  placeholder="interval"
+                />
+                <input
+                  className="text-input"
+                  value={recurrenceCadence === "monthly" ? recurrenceDayOfMonth : recurrenceWeekdays}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                    if (recurrenceCadence === "monthly") {
+                      setRecurrenceDayOfMonth(event.currentTarget.value);
+                    } else {
+                      setRecurrenceWeekdays(event.currentTarget.value);
+                    }
+                  }}
+                  placeholder={recurrenceCadence === "monthly" ? "day of month (1-31)" : "weekdays 0,2,4 (weekly only)"}
+                />
+                <button className="btn" onClick={() => void createRecurrenceRule()}>
+                  Add recurring
+                </button>
+              </section>
+              {recurrenceAdvanced ? (
+                <section className="recurrence-advanced-grid" aria-label="Recurring advanced options">
+                  <select
+                    className="text-input"
+                    value={recurrencePolicy}
+                    onChange={(event: ChangeEvent<HTMLSelectElement>) => setRecurrencePolicy(event.currentTarget.value as "calendar" | "completion")}
+                  >
+                    <option value="completion">completion</option>
+                    <option value="calendar">calendar</option>
+                  </select>
+                  <input
+                    className="text-input"
+                    value={recurrenceTags}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) => setRecurrenceTags(event.currentTarget.value)}
+                    placeholder="tags owner:user,project:..."
+                  />
+                  <input
+                    className="text-input"
+                    value={recurrenceTimezone}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) => setRecurrenceTimezone(event.currentTarget.value)}
+                    placeholder="timezone"
+                  />
+                  <input
+                    className="text-input"
+                    value={recurrenceSkipDates}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) => setRecurrenceSkipDates(event.currentTarget.value)}
+                    placeholder="skip dates YYYY-MM-DD,..."
+                  />
+                </section>
+              ) : null}
+              {recurrenceError ? <p className="error-text panel-line">{recurrenceError}</p> : null}
+
+              <div className="tag-grid recurrence-rule-grid">
+                {recurrenceRules.map((rule) => (
+                  <section className="tag-group" key={rule.id}>
+                    <header className="tag-head">
+                      <span className="tag-label">{rule.titleTemplate}</span>
+                      <div className="task-item-actions">
+                        <button className="btn" onClick={() => void toggleRecurrenceRule(rule)}>
+                          {rule.active ? "Pause" : "Resume"}
+                        </button>
+                      </div>
+                    </header>
+                    <p className="task-meta">
+                      {recurrenceSummary(rule)} | {rule.generationPolicy} | next {rule.nextRunDate} | {rule.timezone} | {rule.active ? "active" : "paused"}
+                    </p>
+                    <p className="task-meta">tags: {rule.tags.join(",")}</p>
+                    {rule.exceptionDates && rule.exceptionDates.length > 0 ? (
+                      <p className="task-meta">skip: {rule.exceptionDates.join(",")}</p>
+                    ) : null}
+                  </section>
+                ))}
+                {recurrenceRules.length === 0 ? <p className="task-meta panel-line">No recurrence rules.</p> : null}
+              </div>
+              </>
+              ) : null}
+
+              {activePage === "tasks" ? (
+              <>
               <div className="section-head">
                 <h2>Open</h2>
                 <div className="task-id-hint">
@@ -858,6 +1155,8 @@ export function App() {
                     </button>
                   ) : null}
                 </div>
+              ) : null}
+              </>
               ) : null}
             </section>
           ) : activePage === "analytics" ? (

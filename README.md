@@ -7,7 +7,7 @@ Deployed API: https://tiny-todo-api.signalnerve.workers.dev
 ## What is included
 
 - Worker API with per-token auth backed by D1 (`users` + `api_tokens`).
-- React web UI (Vite + `@cloudflare/kumo`) served from the same Worker at `/app`.
+- React web UI (Vite + `@cloudflare/kumo`) served from the same Worker at `/app` with sidebar pages for `New task`, `Recurring`, `Tasks`, `Analytics`, and `Settings`.
 - Drizzle schema and D1 migration SQL for auth, lists/memberships RBAC, tasks, and recurrence rules.
 - Task endpoints: create, list, update, complete (with lightweight `tags`).
 - Task endpoints also support delete for full CRUD (`DELETE /tasks/:taskId`).
@@ -64,8 +64,8 @@ Deployed API: https://tiny-todo-api.signalnerve.workers.dev
     npm run cli -- list --status open --sort due_date:asc
     npm run cli -- list --status all --tag owner:agent
    npm run cli -- list --status all --search docs --due-before 2026-03-31 --json
-   npm run cli -- recur "Daily standup note" --cadence daily --interval 1 --timezone America/New_York --skip 2026-03-27,2026-03-31
-   npm run cli -- recur-list --sort next_run_date:asc --json
+   npm run cli -- recur "Daily standup note" --cadence daily --interval 1 --policy completion --tag owner:user,project:standups --timezone America/New_York --skip 2026-03-27,2026-03-31
+   npm run cli -- recur-list --list-id default:local-dev-user --json
    npm run cli -- done <task-id>
      npm run cli -- sync-agent --out agent/snapshot.md
      ```
@@ -175,7 +175,7 @@ SHA-256 hashed and looked up in `api_tokens.token_hash`; requests run with that 
 - `PUT /lists/:listId/memberships/:userId`
 - `DELETE /lists/:listId/memberships/:userId`
 - `POST /recurrence-rules`
-- `GET /recurrence-rules?listId=<optional-list-id>`
+- `GET /recurrence-rules?listId=<optional-list-id>&active=true|false|all`
 - `PATCH /recurrence-rules/:ruleId`
 - `POST /jobs/materialize-recurrence`
 
@@ -198,6 +198,11 @@ SHA-256 hashed and looked up in `api_tokens.token_hash`; requests run with that 
 - `listId` / `list_id` (optional): exact match by task `listId`.
 - `sort` (optional): `default`, `due_date_asc`, `due_date_desc`, `created_at_asc`, `created_at_desc`.
 - `tag` (optional): comma-delimited or repeated tag filter (for example `tag=owner:user` or `tag=owner:user,project:todos`).
+
+### `GET /recurrence-rules` query options
+
+- `listId` / `list_id` (optional): scope rules to a readable list.
+- `active` (optional): `true` (default), `false`, or `all`.
 
 ### `GET /analytics/overview` query options
 
@@ -291,8 +296,12 @@ curl -sS -X POST "$TODO_API_URL/jobs/materialize-recurrence" \
 - Rules are timezone-aware (`timezone`, IANA string like `America/New_York`).
 - `daily`: advances by calendar days in the configured timezone.
 - `weekly`: advances by interval weeks; optional `weekdays` (0=Sun...6=Sat) constrain generation days.
+- `monthly`: advances by interval months; optional `dayOfMonth` (1-31) pins each run to a month day, clamped for short months.
 - `exceptionDates` skips specific due dates (`YYYY-MM-DD`) while still advancing schedule cursor.
 - Materializer catches up missed runs deterministically, bounded to 366 schedule steps per rule per run.
+- `generationPolicy: calendar` catches up all missed schedule dates up to materialization date.
+- `generationPolicy: completion` keeps one open instance; the next task is created when the current instance is completed.
+- Each rule stores `tags`; generated tasks inherit these tags.
 - Duplicate recurrence tasks are prevented by DB uniqueness on
   `(list_id, recurrence_rule_id, due_date)` when recurrence keys are present.
 
@@ -300,19 +309,27 @@ curl -sS -X POST "$TODO_API_URL/jobs/materialize-recurrence" \
 
 - `timezone` (optional): IANA timezone string, defaults to `UTC`.
 - `exceptionDates` (optional): array of `YYYY-MM-DD` dates to skip.
+- `dayOfMonth` (optional): integer 1-31, used by `monthly` cadence.
+- `generationPolicy` (optional): `calendar` or `completion` (default: `calendar`).
+- `tags` (optional): recurrence tag template. Must include exactly one owner tag and one `project:<slug>` tag.
+- If `tags` is omitted, rule creation tries to infer tags from recent same-title tasks in the same list; if no match exists, defaults to `owner:user,project:general`.
 - `anchorDate` defaults to "today" in the configured timezone.
 
 ### CLI recurrence options
 
 - `--timezone Area/City` sets recurrence timezone.
 - `--skip YYYY-MM-DD[,YYYY-MM-DD...]` sets exception dates.
+- `--day-of-month 1-31` sets month day for `--cadence monthly`.
+- `--policy calendar|completion` controls when the next instance is created.
+- `--tag owner:user,project:<slug>` sets recurrence rule tags for generated tasks.
 
 ### CLI list/filter options (Phase 2)
 
 - `--json` prints raw API JSON for `list` and `recur-list`.
 - `add` requires tags that include exactly one owner tag (`owner:user` or `owner:agent`) and one `project:<slug>` tag.
 - `--tag owner:user,project:todos` tags a task on `add` and filters by tags on `list`.
-- `--list-id`, `--due-before`, `--due-after`, `--search`, and `--sort` are passed through to API query params.
+- `list` supports `--list-id`, `--due-before`, `--due-after`, `--search`, and `--sort` query passthrough.
+- `recur-list` supports `--list-id` and `--json`.
 - `list` defaults to `--status open` and `limit=200`.
 
 ## Notes for deploy

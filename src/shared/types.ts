@@ -1,6 +1,8 @@
 export type TaskStatus = "open" | "done";
 
-export type Cadence = "daily" | "weekly";
+export type Cadence = "daily" | "weekly" | "monthly";
+
+export type RecurrenceGenerationPolicy = "calendar" | "completion";
 
 export type ListRole = "owner" | "editor" | "viewer";
 
@@ -72,9 +74,12 @@ export interface CreateRecurrenceRuleInput {
   cadence: Cadence;
   interval?: number;
   weekdays?: number[];
+  dayOfMonth?: number;
   timezone?: string;
   anchorDate?: string;
   exceptionDates?: string[];
+  generationPolicy?: RecurrenceGenerationPolicy;
+  tags?: string[];
   listId?: string;
 }
 
@@ -83,6 +88,9 @@ export interface UpdateRecurrenceRuleInput {
   exceptionDates?: string[];
   active?: boolean;
   nextRunDate?: string;
+  dayOfMonth?: number | null;
+  generationPolicy?: RecurrenceGenerationPolicy;
+  tags?: string[];
 }
 
 export interface TaskDTO {
@@ -115,10 +123,13 @@ export interface RecurrenceRuleDTO {
   cadence: Cadence;
   interval: number;
   weekdays: number[] | null;
+  dayOfMonth: number | null;
   timezone: string;
   anchorDate: string;
   nextRunDate: string;
   exceptionDates: string[] | null;
+  generationPolicy: RecurrenceGenerationPolicy;
+  tags: string[];
   active: boolean;
   createdAt: string;
   updatedAt: string;

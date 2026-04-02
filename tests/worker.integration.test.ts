@@ -275,6 +275,151 @@ describe("worker integration", () => {
     ).toBe(true);
   });
 
+  it("supports monthly recurrence with dayOfMonth and list_id filtering", async () => {
+    const context = await newContext();
+
+    const createRuleResponse = await apiRequest(context, "/recurrence-rules", {
+      method: "POST",
+      body: JSON.stringify({
+        titleTemplate: "Monthly flea medication",
+        cadence: "monthly",
+        interval: 1,
+        dayOfMonth: 1,
+        anchorDate: "2026-01-01"
+      })
+    });
+    expect(createRuleResponse.status).toBe(201);
+    const createRuleBody = await readJson<{
+      recurrenceRule: { id: string; cadence: string; dayOfMonth: number | null; generationPolicy: string };
+    }>(createRuleResponse);
+    expect(createRuleBody.recurrenceRule.cadence).toBe("monthly");
+    expect(createRuleBody.recurrenceRule.dayOfMonth).toBe(1);
+    expect(createRuleBody.recurrenceRule.generationPolicy).toBe("calendar");
+
+    const materializeResponse = await apiRequest(context, "/jobs/materialize-recurrence", {
+      method: "POST",
+      body: JSON.stringify({ date: "2026-03-03" })
+    });
+    expect(materializeResponse.status).toBe(200);
+
+    const listTasksResponse = await apiRequest(context, "/tasks?status=all&limit=50", { method: "GET" });
+    expect(listTasksResponse.status).toBe(200);
+    const listTasksBody = await readJson<{ tasks: Array<{ dueDate: string | null; recurrenceRuleId: string | null }> }>(
+      listTasksResponse
+    );
+    expect(listTasksBody.tasks.map((task) => task.dueDate)).toEqual(["2026-01-01", "2026-02-01", "2026-03-01"]);
+    expect(listTasksBody.tasks.every((task) => task.recurrenceRuleId === createRuleBody.recurrenceRule.id)).toBe(true);
+
+    const listRulesBySnakeCase = await apiRequest(context, "/recurrence-rules?list_id=default:test-user&active=all", {
+      method: "GET"
+    });
+    expect(listRulesBySnakeCase.status).toBe(200);
+    const listRulesBody = await readJson<{ recurrenceRules: Array<{ id: string; active: boolean }> }>(listRulesBySnakeCase);
+    expect(listRulesBody.recurrenceRules.map((rule) => rule.id)).toContain(createRuleBody.recurrenceRule.id);
+  });
+
+  it("uses completion policy to create next instance only when current one is completed", async () => {
+    const context = await newContext();
+
+    const createRuleResponse = await apiRequest(context, "/recurrence-rules", {
+      method: "POST",
+      body: JSON.stringify({
+        titleTemplate: "Completion-based monthly",
+        cadence: "monthly",
+        interval: 1,
+        dayOfMonth: 1,
+        anchorDate: "2026-04-01",
+        generationPolicy: "completion",
+        tags: ["owner:user", "project:home"]
+      })
+    });
+    expect(createRuleResponse.status).toBe(201);
+    const createRuleBody = await readJson<{
+      recurrenceRule: { id: string; generationPolicy: string; nextRunDate: string; tags: string[] };
+    }>(createRuleResponse);
+    expect(createRuleBody.recurrenceRule.generationPolicy).toBe("completion");
+    expect(createRuleBody.recurrenceRule.tags).toEqual(["owner:user", "project:home"]);
+
+    const firstMaterialize = await apiRequest(context, "/jobs/materialize-recurrence", {
+      method: "POST",
+      body: JSON.stringify({ date: "2026-04-10" })
+    });
+    expect(firstMaterialize.status).toBe(200);
+
+    const beforeComplete = await apiRequest(context, "/tasks?status=open&search=Completion-based monthly&limit=20", { method: "GET" });
+    expect(beforeComplete.status).toBe(200);
+    const beforeCompleteBody = await readJson<{
+      tasks: Array<{ id: string; dueDate: string | null; recurrenceRuleId: string | null; tags: string[] }>;
+    }>(beforeComplete);
+    expect(beforeCompleteBody.tasks).toHaveLength(1);
+    expect(beforeCompleteBody.tasks[0]?.dueDate).toBe("2026-04-01");
+    expect(beforeCompleteBody.tasks[0]?.tags).toEqual(["owner:user", "project:home"]);
+
+    const secondMaterialize = await apiRequest(context, "/jobs/materialize-recurrence", {
+      method: "POST",
+      body: JSON.stringify({ date: "2026-04-20" })
+    });
+    expect(secondMaterialize.status).toBe(200);
+
+    const stillSingleOpen = await apiRequest(context, "/tasks?status=open&search=Completion-based monthly&limit=20", {
+      method: "GET"
+    });
+    const stillSingleOpenBody = await readJson<{ tasks: Array<{ id: string }> }>(stillSingleOpen);
+    expect(stillSingleOpenBody.tasks).toHaveLength(1);
+
+    const openTaskId = beforeCompleteBody.tasks[0]?.id;
+    expect(openTaskId).toBeDefined();
+    const completeResponse = await apiRequest(context, `/tasks/${openTaskId}/complete`, { method: "POST" });
+    expect(completeResponse.status).toBe(200);
+
+    const afterComplete = await apiRequest(context, "/tasks?status=open&search=Completion-based monthly&limit=20", { method: "GET" });
+    const afterCompleteBody = await readJson<{
+      tasks: Array<{ dueDate: string | null; recurrenceRuleId: string | null; tags: string[] }>;
+    }>(afterComplete);
+    expect(afterCompleteBody.tasks).toHaveLength(1);
+    expect(afterCompleteBody.tasks[0]?.dueDate).toBe("2026-05-01");
+    expect(afterCompleteBody.tasks[0]?.recurrenceRuleId).toBe(createRuleBody.recurrenceRule.id);
+    expect(afterCompleteBody.tasks[0]?.tags).toEqual(["owner:user", "project:home"]);
+  });
+
+  it("infers recurrence tags from existing same-title tasks when tags are omitted", async () => {
+    const context = await newContext();
+    await createTask(context, {
+      title: "Water plants",
+      dueDate: "2026-03-01",
+      tags: ["owner:user", "project:home"]
+    });
+
+    const createRuleResponse = await apiRequest(context, "/recurrence-rules", {
+      method: "POST",
+      body: JSON.stringify({
+        titleTemplate: "Water plants",
+        cadence: "daily",
+        interval: 1,
+        anchorDate: "2026-03-02"
+      })
+    });
+    expect(createRuleResponse.status).toBe(201);
+    const createRuleBody = await readJson<{ recurrenceRule: { id: string; tags: string[] } }>(createRuleResponse);
+    expect(createRuleBody.recurrenceRule.tags).toEqual(["owner:user", "project:home"]);
+
+    const materializeResponse = await apiRequest(context, "/jobs/materialize-recurrence", {
+      method: "POST",
+      body: JSON.stringify({ date: "2026-03-02" })
+    });
+    expect(materializeResponse.status).toBe(200);
+
+    const recurrenceTasksResponse = await apiRequest(context, "/tasks?status=all&search=Water plants&limit=20", {
+      method: "GET"
+    });
+    const recurrenceTasksBody = await readJson<{
+      tasks: Array<{ recurrenceRuleId: string | null; dueDate: string | null; tags: string[] }>;
+    }>(recurrenceTasksResponse);
+    const generated = recurrenceTasksBody.tasks.find((task) => task.recurrenceRuleId === createRuleBody.recurrenceRule.id);
+    expect(generated?.dueDate).toBe("2026-03-02");
+    expect(generated?.tags).toEqual(["owner:user", "project:home"]);
+  });
+
   it("supports list creation and owner-managed memberships", async () => {
     const context = await newContext();
     await context.createUserToken({ userId: "editor-user", token: "editor-token" });

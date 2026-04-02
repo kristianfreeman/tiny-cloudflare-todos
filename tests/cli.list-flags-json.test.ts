@@ -417,7 +417,7 @@ describe("cli list json and filter flags", () => {
     }
 
     const result = await runCli(
-      ["recur-list", "--search", "standup", "--sort", "next_run_date:asc", "--json"],
+      ["recur-list", "--list-id", "ops", "--json"],
       `http://127.0.0.1:${String(address.port)}`,
       token
     );
@@ -427,8 +427,7 @@ describe("cli list json and filter flags", () => {
     expect(seenRuleUrls).toHaveLength(1);
 
     const requestUrl = new URL(seenRuleUrls[0] ?? "", "http://unit.test");
-    expect(requestUrl.searchParams.get("search")).toBe("standup");
-    expect(requestUrl.searchParams.get("sort")).toBe("next_run_date:asc");
+    expect(requestUrl.searchParams.get("listId")).toBe("ops");
 
     const output = JSON.parse(result.stdout) as {
       recurrenceRules: Array<{ id: string; titleTemplate: string; nextRunDate: string }>;

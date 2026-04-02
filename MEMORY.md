@@ -49,3 +49,30 @@
 - If UI fetches done tasks with a hard `limit`, header counts based on `closedTasks.length` cap at that limit and appear stuck (for example always 500).
 - `/tasks` should return pagination metadata (`total`, `limit`, `offset`, `hasMore`) so UI can show true totals while rendering only the latest page.
 - For closed-task recency views, use a completion-based sort (`completed_at_desc`) rather than default due-date sorting.
+
+## Recurrence Freshness Guardrails (Monthly Cadence, Filter Param Drift, and Active Rule Visibility)
+
+- Recurrence contract drifted over time: CLI `recur-list` reused task-style filters (`search`, `sort`, `list_id`) while recurrence API only supported `listId`; keep a dedicated recurrence filter path and accept both `listId`/`list_id` server-side for backward compatibility.
+- Monthly recurring tasks need first-class fields (`cadence: monthly`, optional `dayOfMonth`) instead of overloading weekly/day math; month-day scheduling must clamp to shorter months instead of skipping runs.
+- UI recurrence management needs `active=all` listing to support both pause and resume actions; returning only active rules makes paused rules disappear and becomes a one-way toggle.
+
+## Secret-Scoped API Calls for tiny-todo Wrapper Sessions
+
+- The `tiny-todo` wrapper injects `TODO_API_TOKEN` via `sec run` only for that subprocess; raw shell commands will not automatically inherit token env vars.
+- For direct API calls outside CLI commands (for example manual recurrence materialization), use `sec get TODO_API_URL --scope global` plus `sec run TODO_API_TOKEN --scope global -- ...` in the same command chain.
+
+## Recurrence Materialization Tag Safety (Prevent Untagged Generated Tasks)
+
+- Recurrence-generated tasks can bypass create-task tag validation because they are inserted by materializer internals, so tags must be assigned explicitly during materialization.
+- Defaulting recurrence-generated tasks to `owner:user` + `project:general` prevents untagged operational tasks and keeps owner/project dashboards consistent.
+
+## Recurrence Rule Tag Templates and Completion Policy for One-at-a-Time Tasks
+
+- Recurrence rules now carry `tags` and generated tasks inherit those tags; this prevents drift between manually created seed tasks and future generated instances.
+- Rule creation should infer tags from existing same-title tasks in the same list when no tags are explicitly provided, then fall back to safe defaults.
+- `generationPolicy: completion` supports one-at-a-time recurrence: materializer creates at most one open instance, and marking the current one done immediately spawns the next due occurrence.
+
+## Recurrence Docs Drift Guard (Keep README Query/Flags Aligned With Real Endpoints)
+
+- `recur-list` docs can drift if task list flags are copied over; keep README aligned to actual support (`--list-id`, `--json`) and avoid undocumented filter passthrough claims.
+- Recurrence API docs should explicitly include `active=true|false|all` and `listId`/`list_id` compatibility to match server behavior and UI usage.

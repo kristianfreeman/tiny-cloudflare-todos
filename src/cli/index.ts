@@ -30,8 +30,8 @@ Commands:
   project-tag [--cwd <path>] [--json]
   list [--status open|done|all] [--list-id <id>] [--due-before YYYY-MM-DD] [--due-after YYYY-MM-DD] [--search <text>] [--sort <field>] [--tag <tag[,tag...]>] [--json]
   done <task-id>
-  recur <title-template> --cadence daily|weekly [--interval N] [--weekdays 1,3,5] [--note <text>] [--start YYYY-MM-DD] [--timezone Area/City] [--skip YYYY-MM-DD[,YYYY-MM-DD...]]
-  recur-list [--list-id <id>] [--due-before YYYY-MM-DD] [--due-after YYYY-MM-DD] [--search <text>] [--sort <field>] [--json]
+  recur <title-template> --cadence daily|weekly|monthly [--interval N] [--weekdays 1,3,5] [--day-of-month 1-31] [--policy calendar|completion] [--tag <tag[,tag...]>] [--note <text>] [--start YYYY-MM-DD] [--timezone Area/City] [--skip YYYY-MM-DD[,YYYY-MM-DD...]]
+  recur-list [--list-id <id>] [--json]
   sync-agent [--out agent/snapshot.md]
   token-hash <token>
 
@@ -136,6 +136,13 @@ const appendListFilters = (params: URLSearchParams, filters: ListFilterOptions):
   }
   if (filters.tag) {
     params.set("tag", filters.tag);
+  }
+};
+
+const appendRecurrenceListFilters = (params: URLSearchParams, options: ParsedArgs["options"]): void => {
+  const listId = optionString(options, "list-id");
+  if (listId) {
+    params.set("listId", listId);
   }
 };
 
@@ -319,8 +326,10 @@ const printTasks = (tasks: TaskDTO[]): void => {
 const formatRule = (rule: RecurrenceRuleDTO): string => {
   const cadence = `${rule.cadence}/${rule.interval}`;
   const weekdays = rule.weekdays?.length ? ` weekdays:${rule.weekdays.join(",")}` : "";
+  const dayOfMonth = rule.dayOfMonth ? ` day:${String(rule.dayOfMonth)}` : "";
   const exceptionDates = rule.exceptionDates?.length ? ` skip:${rule.exceptionDates.join(",")}` : "";
-  return `${rule.id} ${rule.titleTemplate} (${cadence}${weekdays}) tz:${rule.timezone} next:${rule.nextRunDate}${exceptionDates}`;
+  const tags = rule.tags.length > 0 ? ` tags:${rule.tags.join(",")}` : "";
+  return `${rule.id} ${rule.titleTemplate} (${cadence}${weekdays}${dayOfMonth}) policy:${rule.generationPolicy} tz:${rule.timezone} next:${rule.nextRunDate}${exceptionDates}${tags}`;
 };
 
 const printRecurrenceRules = (rules: RecurrenceRuleDTO[]): void => {
@@ -332,12 +341,13 @@ const printRecurrenceRules = (rules: RecurrenceRuleDTO[]): void => {
   const rows = rules.map((rule) => [
     rule.id,
     `${rule.cadence}/${String(rule.interval)}`,
+    rule.dayOfMonth ? String(rule.dayOfMonth) : "-",
     rule.nextRunDate,
     rule.timezone,
     rule.titleTemplate,
     rule.exceptionDates?.length ? rule.exceptionDates.join(",") : "-"
   ]);
-  process.stdout.write(`${formatTable(["ID", "CADENCE", "NEXT", "TZ", "TITLE", "SKIP"], rows)}\n`);
+  process.stdout.write(`${formatTable(["ID", "CADENCE", "DAY", "NEXT", "TZ", "TITLE", "SKIP"], rows)}\n`);
 };
 
 const deterministicTaskSort = (left: TaskDTO, right: TaskDTO): number => {
@@ -393,7 +403,7 @@ const syncAgentSnapshot = async (outPathArg: string | undefined): Promise<void> 
     for (const rule of sortedRules) {
       const weekdays = rule.weekdays?.length ? rule.weekdays.join(",") : "none";
       lines.push(
-        `- ${rule.id} | ${rule.titleTemplate} | cadence:${rule.cadence} | interval:${rule.interval} | weekdays:${weekdays} | timezone:${rule.timezone} | skip:${rule.exceptionDates?.join(",") ?? "none"} | next:${rule.nextRunDate}`
+        `- ${rule.id} | ${rule.titleTemplate} | cadence:${rule.cadence} | interval:${rule.interval} | weekdays:${weekdays} | dayOfMonth:${rule.dayOfMonth ?? "none"} | timezone:${rule.timezone} | skip:${rule.exceptionDates?.join(",") ?? "none"} | next:${rule.nextRunDate}`
       );
     }
   }
@@ -480,7 +490,7 @@ const main = async (): Promise<void> => {
   if (command === "recur-list") {
     const parsed = parseArgs(rest);
     const params = new URLSearchParams();
-    appendListFilters(params, optionListFilters(parsed.options));
+    appendRecurrenceListFilters(params, parsed.options);
     const query = params.toString();
 
     const { recurrenceRules } = await request<{ recurrenceRules: RecurrenceRuleDTO[] }>(
@@ -613,8 +623,8 @@ const main = async (): Promise<void> => {
     }
 
     const cadence = typeof parsed.options.cadence === "string" ? parsed.options.cadence : "daily";
-    if (cadence !== "daily" && cadence !== "weekly") {
-      throw new Error("--cadence must be daily or weekly");
+    if (cadence !== "daily" && cadence !== "weekly" && cadence !== "monthly") {
+      throw new Error("--cadence must be daily, weekly, or monthly");
     }
 
     const intervalRaw = typeof parsed.options.interval === "string" ? Number(parsed.options.interval) : 1;
@@ -646,6 +656,25 @@ const main = async (): Promise<void> => {
             .filter((part) => Number.isInteger(part) && part >= 0 && part <= 6)
         : undefined;
 
+    const dayOfMonthRaw = typeof parsed.options["day-of-month"] === "string" ? Number(parsed.options["day-of-month"]) : undefined;
+    if (dayOfMonthRaw !== undefined && (!Number.isInteger(dayOfMonthRaw) || dayOfMonthRaw < 1 || dayOfMonthRaw > 31)) {
+      throw new Error("--day-of-month must be an integer between 1 and 31");
+    }
+    if (dayOfMonthRaw !== undefined && cadence !== "monthly") {
+      throw new Error("--day-of-month is only supported for --cadence monthly");
+    }
+    if (weekdayValues && weekdayValues.length > 0 && cadence !== "weekly") {
+      throw new Error("--weekdays is only supported for --cadence weekly");
+    }
+
+    const generationPolicyRaw = optionString(parsed.options, "policy");
+    if (generationPolicyRaw && generationPolicyRaw !== "calendar" && generationPolicyRaw !== "completion") {
+      throw new Error("--policy must be calendar or completion");
+    }
+
+    const recurrenceTags = parseTagsOption(optionString(parsed.options, "tag"));
+    const withProjectTags = recurrenceTags ? withInferredProjectTag(recurrenceTags, parsed.options) : undefined;
+
     const payload: CreateRecurrenceRuleInput = {
       titleTemplate,
       cadence,
@@ -656,6 +685,15 @@ const main = async (): Promise<void> => {
     }
     if (weekdayValues && weekdayValues.length > 0) {
       payload.weekdays = weekdayValues;
+    }
+    if (dayOfMonthRaw !== undefined) {
+      payload.dayOfMonth = dayOfMonthRaw;
+    }
+    if (generationPolicyRaw) {
+      payload.generationPolicy = generationPolicyRaw as "calendar" | "completion";
+    }
+    if (withProjectTags) {
+      payload.tags = withProjectTags;
     }
     if (anchorDate) {
       payload.anchorDate = anchorDate;

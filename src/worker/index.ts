@@ -20,6 +20,7 @@ import type {
   ListMembershipDTO,
   ListRole,
   ListTasksResponse,
+  RecurrenceGenerationPolicy,
   RecurrenceRuleDTO,
   TaskSort,
   TaskDTO,
@@ -52,6 +53,7 @@ interface ApiError {
 }
 
 const REQUIRED_OWNER_TAGS = new Set(["owner:user", "owner:agent"]);
+const DEFAULT_RECURRING_TASK_TAGS = ["owner:user", "project:general"] as const;
 
 const json = (data: unknown, status = 200): Response =>
   new Response(JSON.stringify(data), {
@@ -73,6 +75,7 @@ const LIST_ROLE_RANK: Record<ListRole, number> = {
   editor: 2,
   viewer: 1
 };
+const RECURRENCE_GENERATION_POLICIES: readonly RecurrenceGenerationPolicy[] = ["calendar", "completion"];
 const TASK_SORTS: readonly TaskSort[] = [
   "default",
   "due_date_asc",
@@ -184,6 +187,23 @@ const addDays = (value: string, amount: number): string => {
   return dateToIso(date);
 };
 
+const daysInMonthUtc = (year: number, month: number): number => new Date(Date.UTC(year, month, 0)).getUTCDate();
+
+const addMonthsWithDayOfMonth = (value: string, monthDelta: number, requestedDayOfMonth: number): string => {
+  const parsed = parseIsoDate(value);
+  if (!parsed) {
+    return value;
+  }
+
+  const baseMonthIndex = parsed.month - 1 + monthDelta;
+  const targetYear = parsed.year + Math.floor(baseMonthIndex / 12);
+  const normalizedMonthIndex = ((baseMonthIndex % 12) + 12) % 12;
+  const targetMonth = normalizedMonthIndex + 1;
+  const cappedDay = Math.min(Math.max(1, requestedDayOfMonth), daysInMonthUtc(targetYear, targetMonth));
+  const date = new Date(Date.UTC(targetYear, normalizedMonthIndex, cappedDay));
+  return dateToIso(date);
+};
+
 const todayIsoInTimezone = (timeZone: string, now = new Date()): string => {
   const formatter = new Intl.DateTimeFormat("en-CA", {
     timeZone,
@@ -228,6 +248,32 @@ const normalizeExceptionDates = (exceptionDates: string[] | null | undefined): s
   return deduped.length > 0 ? deduped : null;
 };
 
+const normalizeDayOfMonth = (value: number | null | undefined): number | null => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (!Number.isInteger(value) || value < 1 || value > 31) {
+    return null;
+  }
+
+  return value;
+};
+
+const normalizeGenerationPolicy = (
+  value: string | null | undefined
+): RecurrenceGenerationPolicy | null => {
+  if (!value) {
+    return null;
+  }
+
+  if (RECURRENCE_GENERATION_POLICIES.includes(value as RecurrenceGenerationPolicy)) {
+    return value as RecurrenceGenerationPolicy;
+  }
+
+  return null;
+};
+
 const normalizeTaskTags = (tags: string[] | null | undefined): string[] | null => {
   if (!tags || tags.length === 0) {
     return null;
@@ -258,6 +304,12 @@ const validateRequiredCreateTaskTags = (tags: string[] | null): string | null =>
 const computeNextRunDate = (rule: typeof recurrenceRules.$inferSelect, fromDate: string): string => {
   if (rule.cadence === "daily") {
     return addDays(fromDate, rule.interval);
+  }
+
+  if (rule.cadence === "monthly") {
+    const fallbackDay = parseIsoDate(rule.anchorDate)?.day ?? parseIsoDate(fromDate)?.day ?? 1;
+    const requestedDayOfMonth = normalizeDayOfMonth(rule.dayOfMonth) ?? fallbackDay;
+    return addMonthsWithDayOfMonth(fromDate, rule.interval, requestedDayOfMonth);
   }
 
   if (rule.cadence !== "weekly") {
@@ -301,13 +353,16 @@ const mapRule = (row: typeof recurrenceRules.$inferSelect): RecurrenceRuleDTO =>
   listId: row.listId,
   titleTemplate: row.titleTemplate,
   noteTemplate: row.noteTemplate,
-  cadence: row.cadence as "daily" | "weekly",
+  cadence: row.cadence as "daily" | "weekly" | "monthly",
   interval: row.interval,
   weekdays: normalizeWeekdays(row.weekdays),
+  dayOfMonth: normalizeDayOfMonth(row.dayOfMonth),
   timezone: row.timezone,
   anchorDate: row.anchorDate,
   nextRunDate: row.nextRunDate,
   exceptionDates: normalizeExceptionDates(row.exceptionDates),
+  generationPolicy: normalizeGenerationPolicy(row.generationPolicy) ?? "calendar",
+  tags: normalizeTaskTags(row.tags) ?? normalizedDefaultRecurringTaskTags(),
   active: row.active,
   createdAt: row.createdAt,
   updatedAt: row.updatedAt
@@ -683,6 +738,76 @@ const syncTaskTags = async (env: Env, taskId: string, userId: string, tags: stri
       createdAt: now
     }))
   );
+};
+
+const normalizedDefaultRecurringTaskTags = (): string[] => [...DEFAULT_RECURRING_TASK_TAGS];
+
+const resolvedRuleTags = (rule: typeof recurrenceRules.$inferSelect): string[] =>
+  normalizeTaskTags(rule.tags) ?? normalizedDefaultRecurringTaskTags();
+
+const inferRecurrenceTagsFromExistingTasks = async (
+  env: Env,
+  userId: string,
+  listId: string,
+  title: string
+): Promise<string[] | null> => {
+  const db = dbForEnv(env);
+  const candidates = await db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(and(eq(tasks.userId, userId), eq(tasks.listId, listId), eq(tasks.title, title)))
+    .orderBy(desc(tasks.updatedAt), desc(tasks.id))
+    .limit(25);
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const candidateIds = candidates.map((candidate) => candidate.id);
+  const tagsByTaskId = await loadTaskTagsByTaskId(env, candidateIds);
+  for (const candidateId of candidateIds) {
+    const tags = normalizeTaskTags(tagsByTaskId.get(candidateId));
+    if (!tags) {
+      continue;
+    }
+    if (!validateRequiredCreateTaskTags(tags)) {
+      return tags;
+    }
+  }
+
+  return null;
+};
+
+const createRecurringTaskInstance = async (
+  env: Env,
+  rule: typeof recurrenceRules.$inferSelect,
+  dueDate: string,
+  nowIso: string
+): Promise<boolean> => {
+  const db = dbForEnv(env);
+  const taskId = crypto.randomUUID();
+  try {
+    await db.insert(tasks).values({
+      id: taskId,
+      userId: rule.userId,
+      listId: rule.listId,
+      title: rule.titleTemplate,
+      note: rule.noteTemplate,
+      status: "open",
+      dueDate,
+      recurrenceRuleId: rule.id,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      completedAt: null
+    });
+    await syncTaskTags(env, taskId, rule.userId, resolvedRuleTags(rule));
+    return true;
+  } catch (insertError) {
+    if (!isUniqueConstraintError(insertError)) {
+      throw insertError;
+    }
+    return false;
+  }
 };
 
 const isUniqueConstraintError = (value: unknown): boolean => {
@@ -1476,6 +1601,9 @@ const updateTask = async (
   }
 
   await db.update(tasks).set(updates).where(eq(tasks.id, taskId));
+  if (nextStatus === "done" && existing.status !== "done") {
+    await materializeNextForCompletionRule(env, existing, updates.updatedAt ?? new Date().toISOString());
+  }
   if (payload.tags !== undefined) {
     await syncTaskTags(env, taskId, existing.userId, normalizeTaskTags(payload.tags));
   }
@@ -1525,6 +1653,10 @@ const completeTask = async (
     .update(tasks)
     .set({ status: "done", completedAt: now, updatedAt: now })
     .where(eq(tasks.id, taskId));
+
+  if (existing.status !== "done") {
+    await materializeNextForCompletionRule(env, existing, now);
+  }
 
   const updated = await db.select().from(tasks).where(eq(tasks.id, taskId));
   if (!updated[0]) {
@@ -1577,14 +1709,17 @@ const createRecurrenceRule = async (
   if (!payload?.titleTemplate?.trim()) {
     return error("titleTemplate is required", 422);
   }
-  if (payload.cadence !== "daily" && payload.cadence !== "weekly") {
-    return error("cadence must be daily or weekly", 422);
+  if (payload.cadence !== "daily" && payload.cadence !== "weekly" && payload.cadence !== "monthly") {
+    return error("cadence must be daily, weekly, or monthly", 422);
   }
 
   const interval = Math.max(1, Math.floor(payload.interval ?? 1));
   const weekdays = normalizeWeekdays(payload.weekdays);
   if (payload.cadence === "weekly" && payload.weekdays && !weekdays) {
     return error("weekdays must contain values between 0 and 6", 422);
+  }
+  if (payload.cadence !== "weekly" && payload.weekdays && payload.weekdays.length > 0) {
+    return error("weekdays is only supported for weekly cadence", 422);
   }
 
   const timezone = payload.timezone?.trim() || "UTC";
@@ -1595,6 +1730,19 @@ const createRecurrenceRule = async (
   const anchorDate = payload.anchorDate ?? todayIsoInTimezone(timezone);
   if (!isValidIsoDate(anchorDate)) {
     return error("anchorDate must be YYYY-MM-DD", 422);
+  }
+
+  const dayOfMonth = normalizeDayOfMonth(payload.dayOfMonth);
+  if (payload.dayOfMonth !== undefined && dayOfMonth === null) {
+    return error("dayOfMonth must be an integer between 1 and 31", 422);
+  }
+  if (payload.cadence === "monthly" && payload.weekdays && payload.weekdays.length > 0) {
+    return error("monthly cadence does not support weekdays", 422);
+  }
+
+  const generationPolicy = payload.generationPolicy ?? "calendar";
+  if (!normalizeGenerationPolicy(generationPolicy)) {
+    return error(`generationPolicy must be one of: ${RECURRENCE_GENERATION_POLICIES.join(", ")}`, 422);
   }
 
   const exceptionDates = normalizeExceptionDates(payload.exceptionDates);
@@ -1610,15 +1758,32 @@ const createRecurrenceRule = async (
     return listIdResult;
   }
 
+  const titleTemplate = payload.titleTemplate.trim();
+  const explicitTags = payload.tags === undefined ? undefined : normalizeTaskTags(payload.tags);
+  if (payload.tags && payload.tags.length > 0 && !explicitTags) {
+    return error("tags must contain at least one non-empty value", 422);
+  }
+  const recurrenceTagValidationError = payload.tags !== undefined ? validateRequiredCreateTaskTags(explicitTags ?? null) : null;
+  if (recurrenceTagValidationError) {
+    return error(recurrenceTagValidationError, 422);
+  }
+  const inferredTags =
+    explicitTags ??
+    (await inferRecurrenceTagsFromExistingTasks(env, auth.userId, listIdResult, titleTemplate)) ??
+    normalizedDefaultRecurringTaskTags();
+
   await db.insert(recurrenceRules).values({
     id,
     userId: auth.userId,
     listId: listIdResult,
-    titleTemplate: payload.titleTemplate.trim(),
+    titleTemplate,
     noteTemplate: payload.noteTemplate?.trim() || null,
     cadence: payload.cadence,
     interval,
     weekdays,
+    tags: inferredTags,
+    dayOfMonth: payload.cadence === "monthly" ? dayOfMonth ?? parseIsoDate(anchorDate)?.day ?? 1 : null,
+    generationPolicy,
     timezone,
     anchorDate,
     nextRunDate: anchorDate,
@@ -1658,7 +1823,11 @@ const createRecurrenceRule = async (
 const listRecurrenceRules = async (request: Request, env: Env, auth: AuthContext): Promise<Response> => {
   const db = dbForEnv(env);
   const url = new URL(request.url);
-  const listId = url.searchParams.get("listId")?.trim() || null;
+  const listId = (url.searchParams.get("listId") ?? url.searchParams.get("list_id"))?.trim() || null;
+  const activeParam = (url.searchParams.get("active") ?? "true").trim().toLowerCase();
+  if (activeParam !== "true" && activeParam !== "false" && activeParam !== "all") {
+    return error("active must be true, false, or all", 422);
+  }
 
   let allowedListIds: string[];
   if (listId) {
@@ -1675,10 +1844,18 @@ const listRecurrenceRules = async (request: Request, env: Env, auth: AuthContext
     return json({ recurrenceRules: [] });
   }
 
+  const activeFilter =
+    activeParam === "all" ? undefined : eq(recurrenceRules.active, activeParam === "true");
+
   const rows = await db
     .select()
     .from(recurrenceRules)
-    .where(and(inArray(recurrenceRules.listId, allowedListIds), eq(recurrenceRules.active, true)))
+    .where(
+      and(
+        inArray(recurrenceRules.listId, allowedListIds),
+        ...(activeFilter ? [activeFilter] : [])
+      )
+    )
     .orderBy(asc(recurrenceRules.nextRunDate), asc(recurrenceRules.id));
 
   return json({ recurrenceRules: rows.map(mapRule) });
@@ -1725,6 +1902,34 @@ const updateRecurrenceRule = async (
       return error("nextRunDate must be YYYY-MM-DD", 422);
     }
     updates.nextRunDate = payload.nextRunDate;
+  }
+
+  if (payload.dayOfMonth !== undefined) {
+    const dayOfMonth = normalizeDayOfMonth(payload.dayOfMonth);
+    if (payload.dayOfMonth !== null && dayOfMonth === null) {
+      return error("dayOfMonth must be an integer between 1 and 31 or null", 422);
+    }
+    updates.dayOfMonth = dayOfMonth;
+  }
+
+  if (payload.generationPolicy !== undefined) {
+    const generationPolicy = normalizeGenerationPolicy(payload.generationPolicy);
+    if (!generationPolicy) {
+      return error(`generationPolicy must be one of: ${RECURRENCE_GENERATION_POLICIES.join(", ")}`, 422);
+    }
+    updates.generationPolicy = generationPolicy;
+  }
+
+  if (payload.tags !== undefined) {
+    const normalizedTags = normalizeTaskTags(payload.tags);
+    if (payload.tags.length > 0 && !normalizedTags) {
+      return error("tags must contain at least one non-empty value", 422);
+    }
+    const recurrenceTagValidationError = validateRequiredCreateTaskTags(normalizedTags);
+    if (recurrenceTagValidationError) {
+      return error(recurrenceTagValidationError, 422);
+    }
+    updates.tags = normalizedTags;
   }
 
   if (Object.keys(updates).length === 1) {
@@ -1805,30 +2010,49 @@ const materializeRecurrences = async (
     }
 
     rulesProcessed += 1;
+    if ((normalizeGenerationPolicy(rule.generationPolicy) ?? "calendar") === "completion") {
+      const hasOpen = await db
+        .select({ id: tasks.id })
+        .from(tasks)
+        .where(and(eq(tasks.recurrenceRuleId, rule.id), eq(tasks.status, "open")))
+        .limit(1);
+      if (hasOpen.length > 0) {
+        continue;
+      }
+
+      let dueDate = rule.nextRunDate;
+      let safetyCounter = 0;
+      const exceptionDateSet = new Set(normalizeExceptionDates(rule.exceptionDates) ?? []);
+      while (exceptionDateSet.has(dueDate) && dueDate <= targetDate && safetyCounter < MAX_MATERIALIZATION_STEPS) {
+        dueDate = computeNextRunDate(rule, dueDate);
+        safetyCounter += 1;
+      }
+
+      if (dueDate <= targetDate) {
+        const createdTask = await createRecurringTaskInstance(env, rule, dueDate, now);
+        if (createdTask) {
+          created += 1;
+        }
+        const nextRunDate = computeNextRunDate(rule, dueDate);
+        await db
+          .update(recurrenceRules)
+          .set({
+            nextRunDate,
+            updatedAt: now
+          })
+          .where(eq(recurrenceRules.id, rule.id));
+      }
+      continue;
+    }
+
     const exceptionDateSet = new Set(normalizeExceptionDates(rule.exceptionDates) ?? []);
     let cursor = rule.nextRunDate;
     let safetyCounter = 0;
     while (cursor <= targetDate && safetyCounter < MAX_MATERIALIZATION_STEPS) {
       if (!exceptionDateSet.has(cursor)) {
-        try {
-          await db.insert(tasks).values({
-            id: crypto.randomUUID(),
-            userId: rule.userId,
-            listId: rule.listId,
-            title: rule.titleTemplate,
-            note: rule.noteTemplate,
-            status: "open",
-            dueDate: cursor,
-            recurrenceRuleId: rule.id,
-            createdAt: now,
-            updatedAt: now,
-            completedAt: null
-          });
+        const createdTask = await createRecurringTaskInstance(env, rule, cursor, now);
+        if (createdTask) {
           created += 1;
-        } catch (insertError) {
-          if (!isUniqueConstraintError(insertError)) {
-            throw insertError;
-          }
         }
       }
 
@@ -1862,6 +2086,53 @@ const materializeRecurrences = async (
   }
 
   return { created, rulesProcessed };
+};
+
+const materializeNextForCompletionRule = async (
+  env: Env,
+  sourceTask: typeof tasks.$inferSelect,
+  nowIso: string
+): Promise<void> => {
+  if (!sourceTask.recurrenceRuleId) {
+    return;
+  }
+
+  const db = dbForEnv(env);
+  const ruleRows = await db
+    .select()
+    .from(recurrenceRules)
+    .where(and(eq(recurrenceRules.id, sourceTask.recurrenceRuleId), eq(recurrenceRules.active, true)))
+    .limit(1);
+  const rule = ruleRows[0];
+  if (!rule) {
+    return;
+  }
+  if ((normalizeGenerationPolicy(rule.generationPolicy) ?? "calendar") !== "completion") {
+    return;
+  }
+
+  const hasOpen = await db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(and(eq(tasks.recurrenceRuleId, rule.id), eq(tasks.status, "open")))
+    .limit(1);
+  if (hasOpen.length > 0) {
+    return;
+  }
+
+  const dueDate = rule.nextRunDate;
+  const createdTask = await createRecurringTaskInstance(env, rule, dueDate, nowIso);
+  if (!createdTask) {
+    return;
+  }
+
+  await db
+    .update(recurrenceRules)
+    .set({
+      nextRunDate: computeNextRunDate(rule, dueDate),
+      updatedAt: nowIso
+    })
+    .where(eq(recurrenceRules.id, rule.id));
 };
 
 const runMaterialization = async (
@@ -2236,6 +2507,8 @@ const handleFetch = async (request: Request, env: Env, requestContext: RequestCo
   const normalizedPath = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
   const isUiPageRoute =
     normalizedPath === "/" ||
+    normalizedPath === "/new" ||
+    normalizedPath === "/recurring" ||
     normalizedPath === "/index.html" ||
     normalizedPath === "/analytics" ||
     normalizedPath === "/settings" ||
