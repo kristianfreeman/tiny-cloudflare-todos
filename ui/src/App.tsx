@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { ClickableRow, Container, Panel, Row, RowStack, SubtlePanel, type RowAction } from "shiro";
 
 interface Task {
   id: string;
@@ -6,6 +7,7 @@ interface Task {
   note: string | null;
   tags: string[];
   dueDate: string | null;
+  recurrenceRuleId: string | null;
   status: "open" | "done";
   createdAt: string;
   completedAt: string | null;
@@ -263,6 +265,7 @@ export function App() {
   const [recurrenceSkipDates, setRecurrenceSkipDates] = useState("");
   const [recurrenceTags, setRecurrenceTags] = useState("owner:user,project:general");
   const [recurrenceAdvanced, setRecurrenceAdvanced] = useState(false);
+  const [showPausedRecurrence, setShowPausedRecurrence] = useState(false);
   const [recurrenceError, setRecurrenceError] = useState<string | null>(null);
   const [loadingRecurrenceRules, setLoadingRecurrenceRules] = useState(false);
   const [activePage, setActivePage] = useState<Page>(initialPage);
@@ -849,386 +852,413 @@ export function App() {
     return every;
   };
 
+  const visibleRecurrenceRules = recurrenceRules.filter((rule) => rule.active || showPausedRecurrence);
+  const pausedRecurrenceCount = recurrenceRules.filter((rule) => !rule.active).length;
+
   const renderTaskRow = (task: Task) => {
     const owner = ownerOfTask(task);
     const ownerLabel = owner === "agent" ? "agent" : "user";
     const dueTone = dueDateTone(task.dueDate);
+    const taskActions: RowAction[] = [];
+    if (task.recurrenceRuleId) {
+      taskActions.push({
+        icon: "↻",
+        callbackFunc: () => navigateToPage("recurring"),
+        title: "Open recurring rules",
+        ariaLabel: "Open recurring rules",
+      });
+    }
+    if (task.status === "open") {
+      taskActions.push({
+        icon: "✓",
+        callbackFunc: () => {
+          if (window.confirm("Mark this task complete?")) {
+            void completeTask(task.id);
+          }
+        },
+        title: "Complete task",
+        ariaLabel: "Complete task",
+      });
+    }
+    taskActions.push({
+      icon: "🗑",
+      callbackFunc: () => {
+        if (window.confirm("Delete this task permanently?")) {
+          void deleteTask(task.id);
+        }
+      },
+      title: "Delete task",
+      ariaLabel: "Delete task",
+      tone: "danger",
+    });
+
     return (
-      <li className="task-item" key={task.id}>
-        <div className="task-title-wrap">
-          {idRevealActive ? (
-            <button className="task-id-copy" type="button" onClick={() => void copyTaskId(task.id)} title={`Copy ${task.id}`}>
-              {task.id}
-            </button>
-          ) : (
-            <input
-              className="text-input"
-              defaultValue={task.title}
-              disabled={task.status === "done"}
-              onBlur={(event: ChangeEvent<HTMLInputElement>) => void updateTaskTitle(task, event.currentTarget.value)}
-            />
-          )}
-          <em className="task-owner-label">{ownerLabel}</em>
-        </div>
-        <span className={`task-meta${dueTone ? ` task-meta-${dueTone}` : ""}`}>{task.dueDate ?? "No due date"}</span>
-        <div className="task-item-actions">
-          {task.status === "open" ? (
-            <button className="btn" onClick={() => void completeTask(task.id)}>
-              Complete
-            </button>
-          ) : null}
-          <button className="btn btn-danger" onClick={() => void deleteTask(task.id)}>
-            Delete
-          </button>
-        </div>
-      </li>
+      <Row
+        key={task.id}
+        className="task-item"
+        tone="transparent"
+        density="compact"
+        hideSlotsSm={["secondary"]}
+        hideSlotsMd={["secondary"]}
+        primary={
+          <>
+            {idRevealActive ? (
+              <button className="task-id-copy" type="button" onClick={() => void copyTaskId(task.id)} title={`Copy ${task.id}`}>
+                {task.id}
+              </button>
+            ) : (
+              <input
+                className="text-input"
+                defaultValue={task.title}
+                disabled={task.status === "done"}
+                onBlur={(event: ChangeEvent<HTMLInputElement>) => void updateTaskTitle(task, event.currentTarget.value)}
+              />
+            )}
+            <em className="task-owner-label">{ownerLabel}</em>
+          </>
+        }
+        warningText={task.dueDate ? <span className={`task-meta${dueTone ? ` task-meta-${dueTone}` : ""}`}>{task.dueDate}</span> : undefined}
+        actions={taskActions}
+      />
     );
   };
 
   if (!sessionChecked) {
-    return <main className="app-shell">Checking session...</main>;
+    return (
+      <Container as="main" className="app-shell app-auth-shell">
+        <Panel className="auth-panel">
+          <Row className="status-row" primary={<span className="task-meta">Checking session...</span>} />
+        </Panel>
+      </Container>
+    );
   }
 
   if (!authenticated) {
     return (
-      <main className="app-shell app-auth-shell">
-        <section className="panel auth-panel">
-          <h1 className="title">Tiny Todo Web</h1>
-          <div className="auth-form">
-            <input
-              className="text-input"
-              type="password"
-              value={password}
-              placeholder="UI password"
-              onChange={(event: ChangeEvent<HTMLInputElement>) => setPassword(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  void login();
-                }
-              }}
-            />
-            <button className="btn" onClick={() => void login()}>
-              Unlock
-            </button>
-          </div>
-          {passwordError ? <p className="error-text">{passwordError}</p> : null}
-        </section>
-      </main>
+      <Container as="main" className="app-shell app-auth-shell">
+        <Panel className="auth-panel">
+          <Row className="auth-row" primary={<span className="title">Tiny Todo Web</span>} />
+          <Row
+            className="auth-row"
+            primary={
+              <input
+                className="text-input"
+                type="password"
+                value={password}
+                placeholder="UI password"
+                onChange={(event: ChangeEvent<HTMLInputElement>) => setPassword(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    void login();
+                  }
+                }}
+              />
+            }
+            actions={[{ icon: "Unlock", callbackFunc: () => void login() }]}
+          />
+          {passwordError ? <Row className="auth-row" primary={<span className="error-text">{passwordError}</span>} /> : null}
+        </Panel>
+      </Container>
     );
   }
 
   return (
-    <main className="app-shell">
-      <div className="app-layout">
-        <aside className="page-nav" aria-label="Pages">
-          <button className={`page-button${activePage === "new-task" ? " is-active" : ""}`} onClick={() => navigateToPage("new-task")}>
+    <Container as="main" className="app-shell">
+      <Container className="app-layout">
+        <Container as="aside" className="page-nav" aria-label="Pages">
+          <ClickableRow active={activePage === "new-task"} onClick={() => navigateToPage("new-task")}>
             New task
-          </button>
-          <button className={`page-button${activePage === "recurring" ? " is-active" : ""}`} onClick={() => navigateToPage("recurring")}>
-            Recurring
-          </button>
-          <button className={`page-button${activePage === "tasks" ? " is-active" : ""}`} onClick={() => navigateToPage("tasks")}>
+          </ClickableRow>
+          <ClickableRow active={activePage === "tasks"} onClick={() => navigateToPage("tasks")}>
             Tasks
-          </button>
-          <button
-            className={`page-button${activePage === "analytics" ? " is-active" : ""}`}
-            onClick={() => navigateToPage("analytics")}
-          >
+          </ClickableRow>
+          <ClickableRow className="nav-recurring" active={activePage === "recurring"} onClick={() => navigateToPage("recurring")}>
+            Recurring
+          </ClickableRow>
+          <ClickableRow active={activePage === "analytics"} onClick={() => navigateToPage("analytics")}>
             Analytics
-          </button>
-          <button
-            className={`page-button${activePage === "settings" ? " is-active" : ""}`}
-            onClick={() => navigateToPage("settings")}
-          >
+          </ClickableRow>
+          <ClickableRow active={activePage === "settings"} onClick={() => navigateToPage("settings")}>
             Settings
-          </button>
-        </aside>
+          </ClickableRow>
+        </Container>
 
-        <section className="page-content">
+        <Container as="section" className="page-content">
           {activePage === "tasks" || activePage === "new-task" || activePage === "recurring" ? (
-            <section className="panel tasks-page">
-              <header className="section-head">
-                <h1 className="title">{activePage === "new-task" ? "New Task" : activePage === "recurring" ? "Recurring" : "Tasks"}</h1>
-                {activePage === "tasks" ? (
-                  <div className="stats-inline">
-                    <span>
-                      {openTasks.length} open
+            <Panel className="tasks-page">
+              <Row
+                className="section-head-row"
+                style="title"
+                as="h1"
+                primary={<span className="title">{activePage === "new-task" ? "New Task" : activePage === "recurring" ? "Recurring" : "Tasks"}</span>}
+                hideSlotsSm={activePage === "tasks" ? ["secondary"] : undefined}
+                hideSlotsMd={activePage === "tasks" ? ["secondary"] : undefined}
+                secondaryText={
+                  activePage === "tasks" ? (
+                    <span className="task-meta">
+                      {openTasks.length} open / {closedLoaded ? `${closedTotalCount} closed` : "closed not loaded"}
                     </span>
-                    <span>
-                      {closedLoaded ? `${closedTotalCount} closed` : "closed not loaded"}
-                    </span>
-                  </div>
-                ) : null}
-              </header>
+                  ) : undefined
+                }
+              />
 
               {activePage === "new-task" ? (
-              <section className="task-create-grid" aria-label="Create task">
-                <input
-                  className="text-input"
-                  placeholder="Task title"
-                  value={taskTitle}
-                  onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskTitle(event.currentTarget.value)}
-                />
-                <input
-                  className="text-input"
-                  placeholder="Task note"
-                  value={taskNote}
-                  onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskNote(event.currentTarget.value)}
-                />
-                <input
-                  className="text-input"
-                  placeholder="tags (comma separated)"
-                  value={taskTags}
-                  onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskTags(event.currentTarget.value)}
-                />
-                <input
-                  className="text-input"
-                  type="date"
-                  value={taskDueDate}
-                  onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskDueDate(event.currentTarget.value)}
-                />
-                <button className="btn" onClick={() => void createTask()}>
-                  Add task
-                </button>
-              </section>
+              <SubtlePanel as="section" className="row-form" aria-label="Create task">
+                <RowStack>
+                  <Row
+                    className="row-form-item"
+                    primary={
+                      <>
+                        <span className="row-label">Title</span>
+                        <input
+                          className="text-input"
+                          placeholder="Task title"
+                          value={taskTitle}
+                          onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskTitle(event.currentTarget.value)}
+                        />
+                      </>
+                    }
+                  />
+                  <Row
+                    className="row-form-item"
+                    primary={
+                      <>
+                        <span className="row-label">Note</span>
+                        <input
+                          className="text-input"
+                          placeholder="Task note"
+                          value={taskNote}
+                          onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskNote(event.currentTarget.value)}
+                        />
+                      </>
+                    }
+                  />
+                  <Row
+                    className="row-form-item"
+                    primary={
+                      <>
+                        <span className="row-label">Tags</span>
+                        <input
+                          className="text-input"
+                          placeholder="owner:user,project:..."
+                          value={taskTags}
+                          onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskTags(event.currentTarget.value)}
+                        />
+                      </>
+                    }
+                  />
+                  <Row
+                    className="row-form-item"
+                    primary={
+                      <>
+                        <span className="row-label">Due</span>
+                        <input
+                          className="text-input"
+                          type="date"
+                          value={taskDueDate}
+                          onChange={(event: ChangeEvent<HTMLInputElement>) => setTaskDueDate(event.currentTarget.value)}
+                        />
+                      </>
+                    }
+                  />
+                  <Row
+                    className="row-form-item row-form-submit"
+                    primary={<span className="task-meta">Create a new task with optional note, tags, and due date.</span>}
+                    actions={[{ icon: "Add task", callbackFunc: () => void createTask() }]}
+                  />
+                </RowStack>
+              </SubtlePanel>
               ) : null}
 
               {activePage === "recurring" ? (
               <>
-              <div className="section-head">
-                <h2>Recurring</h2>
-                <div className="task-id-hint">
-                  <button className={`btn${recurrenceAdvanced ? " is-active" : ""}`} onClick={() => setRecurrenceAdvanced((value) => !value)}>
-                    {recurrenceAdvanced ? "Hide advanced" : "Show advanced"}
-                  </button>
-                  {loadingRecurrenceRules ? <span className="task-meta">Loading...</span> : null}
-                  <span className="task-meta">Calendar schedule (not completion-based).</span>
-                </div>
-              </div>
-              <section className="recurrence-create-grid" aria-label="Create recurrence rule">
-                <input
-                  className="text-input"
-                  placeholder="Recurring title"
-                  value={recurrenceTitle}
-                  onChange={(event: ChangeEvent<HTMLInputElement>) => setRecurrenceTitle(event.currentTarget.value)}
-                />
-                <select
-                  className="text-input"
-                  value={recurrenceCadence}
-                  onChange={(event: ChangeEvent<HTMLSelectElement>) => setRecurrenceCadence(event.currentTarget.value as "daily" | "weekly" | "monthly")}
-                >
-                  <option value="daily">daily</option>
-                  <option value="weekly">weekly</option>
-                  <option value="monthly">monthly</option>
-                </select>
-                <input
-                  className="text-input"
-                  value={recurrenceInterval}
-                  onChange={(event: ChangeEvent<HTMLInputElement>) => setRecurrenceInterval(event.currentTarget.value)}
-                  placeholder="interval"
-                />
-                <input
-                  className="text-input"
-                  value={recurrenceCadence === "monthly" ? recurrenceDayOfMonth : recurrenceWeekdays}
-                  onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                    if (recurrenceCadence === "monthly") {
-                      setRecurrenceDayOfMonth(event.currentTarget.value);
-                    } else {
-                      setRecurrenceWeekdays(event.currentTarget.value);
-                    }
-                  }}
-                  placeholder={recurrenceCadence === "monthly" ? "day of month (1-31)" : "weekdays 0,2,4 (weekly only)"}
-                />
-                <button className="btn" onClick={() => void createRecurrenceRule()}>
-                  Add recurring
-                </button>
-              </section>
-              {recurrenceAdvanced ? (
-                <section className="recurrence-advanced-grid" aria-label="Recurring advanced options">
-                  <select
-                    className="text-input"
-                    value={recurrencePolicy}
-                    onChange={(event: ChangeEvent<HTMLSelectElement>) => setRecurrencePolicy(event.currentTarget.value as "calendar" | "completion")}
-                  >
-                    <option value="completion">completion</option>
-                    <option value="calendar">calendar</option>
-                  </select>
-                  <input
-                    className="text-input"
-                    value={recurrenceTags}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => setRecurrenceTags(event.currentTarget.value)}
-                    placeholder="tags owner:user,project:..."
-                  />
-                  <input
-                    className="text-input"
-                    value={recurrenceTimezone}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => setRecurrenceTimezone(event.currentTarget.value)}
-                    placeholder="timezone"
-                  />
-                  <input
-                    className="text-input"
-                    value={recurrenceSkipDates}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => setRecurrenceSkipDates(event.currentTarget.value)}
-                    placeholder="skip dates YYYY-MM-DD,..."
-                  />
-                </section>
-              ) : null}
-              {recurrenceError ? <p className="error-text panel-line">{recurrenceError}</p> : null}
+              <Row className="section-head-row" style="title" as="h2" primary={<span className="title">Create a new recurrence</span>} />
+              <Row
+                className="status-row"
+                style="warning"
+                primary={<span>Not supported in the web UI yet. Please use the CLI for recurrence creation.</span>}
+              />
 
-              <div className="tag-grid recurrence-rule-grid">
-                {recurrenceRules.map((rule) => (
-                  <section className="tag-group" key={rule.id}>
-                    <header className="tag-head">
-                      <span className="tag-label">{rule.titleTemplate}</span>
-                      <div className="task-item-actions">
-                        <button className="btn" onClick={() => void toggleRecurrenceRule(rule)}>
-                          {rule.active ? "Pause" : "Resume"}
-                        </button>
-                      </div>
-                    </header>
-                    <p className="task-meta">
-                      {recurrenceSummary(rule)} | {rule.generationPolicy} | next {rule.nextRunDate} | {rule.timezone} | {rule.active ? "active" : "paused"}
-                    </p>
-                    <p className="task-meta">tags: {rule.tags.join(",")}</p>
+              <Row
+                className="section-head-row"
+                style="title"
+                as="h2"
+                primary={<span className="title">Active recurrences</span>}
+                alertText={loadingRecurrenceRules ? <span className="task-meta">Loading...</span> : undefined}
+                actions={
+                  pausedRecurrenceCount > 0
+                    ? [
+                        {
+                          icon: showPausedRecurrence ? "Hide paused" : `Show paused (${pausedRecurrenceCount})`,
+                          callbackFunc: () => setShowPausedRecurrence((value) => !value),
+                        },
+                      ]
+                    : undefined
+                }
+              />
+
+              {recurrenceError ? <Row className="status-row" primary={<span className="error-text">{recurrenceError}</span>} /> : null}
+
+              <RowStack className="tag-grid recurrence-rule-grid">
+                {visibleRecurrenceRules.map((rule) => (
+                  <SubtlePanel className="tag-group" key={rule.id}>
+                    <Row
+                      className="tag-head-row"
+                      style="group-header"
+                      as="h3"
+                      primary={<span className="tag-label">{rule.titleTemplate}</span>}
+                      actions={[{ icon: rule.active ? "Pause" : "Resume", callbackFunc: () => void toggleRecurrenceRule(rule) }]}
+                    />
+                    <Row
+                      className="rule-detail-row"
+                      primary={
+                        <span className="task-meta">
+                          {recurrenceSummary(rule)} | {rule.generationPolicy} | next {rule.nextRunDate} | {rule.timezone} | {rule.active ? "active" : "paused"}
+                        </span>
+                      }
+                    />
+                    <Row className="rule-detail-row" primary={<span className="task-meta">tags: {rule.tags.join(",")}</span>} />
                     {rule.exceptionDates && rule.exceptionDates.length > 0 ? (
-                      <p className="task-meta">skip: {rule.exceptionDates.join(",")}</p>
+                      <Row className="rule-detail-row" primary={<span className="task-meta">skip: {rule.exceptionDates.join(",")}</span>} />
                     ) : null}
-                  </section>
+                  </SubtlePanel>
                 ))}
-                {recurrenceRules.length === 0 ? <p className="task-meta panel-line">No recurrence rules.</p> : null}
-              </div>
+                {visibleRecurrenceRules.length === 0 ? <Row className="status-row" primary={<span className="task-meta">No recurrence rules.</span>} /> : null}
+              </RowStack>
               </>
               ) : null}
 
               {activePage === "tasks" ? (
               <>
-              <div className="section-head">
-                <h2>Open</h2>
-                <div className="task-id-hint">
-                  <span className="task-meta">Hold Shift to reveal IDs and click to copy.</span>
-                  {copiedTaskId ? <span className="task-meta task-meta-success">Copied {copiedTaskId}</span> : null}
-                  {loadingTasks ? <span className="task-meta">Loading...</span> : null}
-                </div>
-              </div>
-              {taskError ? <p className="error-text">{taskError}</p> : null}
+              <Row
+                className="section-head-row"
+                style="title"
+                as="h2"
+                hideSlotsSm={["warning"]}
+                hideSlotsMd={["warning"]}
+                primary={<span className="title">Open</span>}
+                warningText={<span className="task-meta">Hold Shift to reveal IDs and click to copy.</span>}
+                alertText={copiedTaskId ? <span className="task-meta task-meta-success">Copied {copiedTaskId}</span> : loadingTasks ? <span className="task-meta">Loading...</span> : undefined}
+              />
+              {taskError ? <Row className="status-row" primary={<span className="error-text">{taskError}</span>} /> : null}
 
-              <div className="tag-grid">
+              <RowStack className="tag-grid">
                 {openGroups.map((group) => (
-                  <section className="tag-group" key={`open-${group.tag}`}>
-                    <header className="tag-head">
-                      <span className="tag-label">
-                        {group.tag} ({group.tasks.length})
-                      </span>
-                    </header>
-                    <ul className="task-list">{group.tasks.map((task) => renderTaskRow(task))}</ul>
-                  </section>
+                  <SubtlePanel className="tag-group" key={`open-${group.tag}`}>
+                    <Row className="tag-head-row" style="group-header" as="h3" primary={<span className="tag-label">{group.tag} ({group.tasks.length})</span>} />
+                    <RowStack className="task-list">{group.tasks.map((task) => renderTaskRow(task))}</RowStack>
+                  </SubtlePanel>
                 ))}
-                {openGroups.length === 0 ? <p className="task-meta">No open tasks.</p> : null}
-              </div>
+                {openGroups.length === 0 ? <Row className="status-row" primary={<span className="task-meta">No open tasks.</span>} /> : null}
+              </RowStack>
 
-              <div className="section-head">
-                <h2>Closed</h2>
-                <button className="btn" onClick={() => setShowClosed((value) => !value)}>
-                  {showClosed ? "Hide" : "Show"}
-                  {closedLoaded ? ` closed (${closedTotalCount})` : " closed"}
-                </button>
-              </div>
+              <Row
+                className="section-head-row"
+                style="title"
+                as="h2"
+                primary={<span className="title">Closed</span>}
+                warningText={<span className="task-meta">{closedLoaded ? `${closedTotalCount} total` : "closed"}</span>}
+                actions={[{ icon: showClosed ? "Hide" : "Show", callbackFunc: () => setShowClosed((value) => !value) }]}
+              />
 
               {showClosed ? (
-                <div className="tag-grid">
-                  {loadingClosedTasks ? <p className="task-meta">Loading closed tasks...</p> : null}
-                  {closedLoaded ? <p className="task-meta">Showing {closedTasks.length} of {closedTotalCount} closed tasks.</p> : null}
+                <RowStack className="tag-grid">
+                  {loadingClosedTasks ? <Row className="status-row" primary={<span className="task-meta">Loading closed tasks...</span>} /> : null}
+                  {closedLoaded ? <Row className="status-row" primary={<span className="task-meta">Showing {closedTasks.length} of {closedTotalCount} closed tasks.</span>} /> : null}
                   {doneGroups.map((group) => (
-                    <section className="tag-group tag-group-closed" key={`done-${group.tag}`}>
-                      <header className="tag-head">
-                        <span className="tag-label">
-                          {group.tag} ({group.tasks.length})
-                        </span>
-                      </header>
-                      <ul className="task-list">{group.tasks.map((task) => renderTaskRow(task))}</ul>
-                    </section>
+                    <SubtlePanel className="tag-group tag-group-closed" key={`done-${group.tag}`}>
+                      <Row className="tag-head-row" style="group-header" as="h3" primary={<span className="tag-label">{group.tag} ({group.tasks.length})</span>} />
+                      <RowStack className="task-list">{group.tasks.map((task) => renderTaskRow(task))}</RowStack>
+                    </SubtlePanel>
                   ))}
-                  {doneGroups.length === 0 ? <p className="task-meta">No closed tasks.</p> : null}
+                  {doneGroups.length === 0 ? <Row className="status-row" primary={<span className="task-meta">No closed tasks.</span>} /> : null}
                   {closedHasMore ? (
-                    <button className="btn" onClick={() => void loadMoreClosedTasks()} disabled={loadingClosedTasks}>
-                      {loadingClosedTasks ? "Loading..." : "Load more closed"}
-                    </button>
+                    <Row
+                      className="status-row"
+                      primary={<span className="task-meta">Load additional closed tasks.</span>}
+                      actions={[
+                        {
+                          icon: loadingClosedTasks ? "Loading..." : "Load more closed",
+                          callbackFunc: () => void loadMoreClosedTasks(),
+                          disabled: loadingClosedTasks,
+                        },
+                      ]}
+                    />
                   ) : null}
-                </div>
+                </RowStack>
               ) : null}
               </>
               ) : null}
-            </section>
+            </Panel>
           ) : activePage === "analytics" ? (
-            <section className="panel analytics-page">
-              <header className="section-head analytics-head">
-                <h1 className="title">
-                  Analytics ({analyticsDays} days)
-                </h1>
-                <div className="analytics-window-toggle" role="group" aria-label="Analytics time window">
-                  <button
-                    className={`btn${analyticsDays === 1 ? " is-active" : ""}`}
-                    onClick={() => setAnalyticsDays(1)}
-                  >
-                    Last day
-                  </button>
-                  <button
-                    className={`btn${analyticsDays === 7 ? " is-active" : ""}`}
-                    onClick={() => setAnalyticsDays(7)}
-                  >
-                    Last week
-                  </button>
-                  <button
-                    className={`btn${analyticsDays === 30 ? " is-active" : ""}`}
-                    onClick={() => setAnalyticsDays(30)}
-                  >
-                    Last 30 days
-                  </button>
-                </div>
-                {loadingAnalytics ? <span className="task-meta">Loading...</span> : null}
-              </header>
+            <Panel className="analytics-page">
+              <Row
+                className="section-head-row analytics-head"
+                style="title"
+                as="h1"
+                primary={<span className="title">Analytics ({analyticsDays} days)</span>}
+                alertText={loadingAnalytics ? <span className="task-meta">Loading...</span> : undefined}
+                actions={[
+                  { icon: "Last day", callbackFunc: () => setAnalyticsDays(1) },
+                  { icon: "Last week", callbackFunc: () => setAnalyticsDays(7) },
+                  { icon: "Last 30 days", callbackFunc: () => setAnalyticsDays(30) },
+                ]}
+              />
               {analytics ? (
-                <p className="task-meta panel-line">
-                  Window: {analytics.window.startDate} to {analytics.window.endDate} ({analytics.window.timeZone})
-                </p>
+                <Row
+                  className="status-row"
+                  primary={<span className="task-meta">Window: {analytics.window.startDate} to {analytics.window.endDate} ({analytics.window.timeZone})</span>}
+                />
               ) : null}
-              {analyticsError ? <p className="error-text panel-line">{analyticsError}</p> : null}
+              {analyticsError ? <Row className="status-row" primary={<span className="error-text">{analyticsError}</span>} /> : null}
 
-              <div className="metrics-grid">
-                <section className="metric-box">
-                  <span className="metric-label">Created</span>
-                  <strong className="metric-value">{analytics?.totals.createdInWindow ?? 0}</strong>
-                </section>
-                <section className="metric-box">
-                  <span className="metric-label">Completed</span>
-                  <strong className="metric-value">{analytics?.totals.completedInWindow ?? 0}</strong>
-                </section>
-                <section className="metric-box">
-                  <span className="metric-label">Open now</span>
-                  <strong className="metric-value">{analytics?.totals.openNow ?? 0}</strong>
-                </section>
-                <section className="metric-box">
-                  <span className="metric-label">Overdue open</span>
-                  <strong className="metric-value">{analytics?.totals.overdueOpen ?? 0}</strong>
-                </section>
-                <section className="metric-box">
-                  <span className="metric-label">Completion rate</span>
-                  <strong className="metric-value">{Math.round((analytics?.totals.completionRateInWindow ?? 0) * 100)}%</strong>
-                </section>
-              </div>
+              <Row className="section-head-row" style="title" as="h2" primary={<span className="title">Overview</span>} />
 
-              <section className="panel-subsection">
-                <header className="section-head analytics-head">
-                  <h2>Daily throughput</h2>
-                  <div className="analytics-legend">
-                    <span className="legend-item">
-                      <span className="legend-swatch legend-created" /> Created
+              <RowStack as="section" className="metrics-row-stack">
+                <Row
+                  className="metric-row"
+                  primary={<span className="metric-label">Created</span>}
+                  secondaryText={<strong className="metric-value">{analytics?.totals.createdInWindow ?? 0}</strong>}
+                />
+                <Row
+                  className="metric-row"
+                  primary={<span className="metric-label">Completed</span>}
+                  secondaryText={<strong className="metric-value">{analytics?.totals.completedInWindow ?? 0}</strong>}
+                />
+                <Row
+                  className="metric-row"
+                  primary={<span className="metric-label">Open now</span>}
+                  secondaryText={<strong className="metric-value">{analytics?.totals.openNow ?? 0}</strong>}
+                />
+                <Row
+                  className="metric-row"
+                  primary={<span className="metric-label">Overdue open</span>}
+                  secondaryText={<strong className="metric-value">{analytics?.totals.overdueOpen ?? 0}</strong>}
+                />
+                <Row
+                  className="metric-row"
+                  primary={<span className="metric-label">Completion rate</span>}
+                  secondaryText={<strong className="metric-value">{Math.round((analytics?.totals.completionRateInWindow ?? 0) * 100)}%</strong>}
+                />
+              </RowStack>
+
+              <SubtlePanel>
+                <Row
+                  className="section-head-row analytics-head"
+                  style="title"
+                  as="h2"
+                  primary={<span className="title">Daily throughput</span>}
+                  secondaryText={
+                    <span className="analytics-legend-row">
+                      <span className="legend-item">
+                        <span className="legend-swatch legend-created" /> Created
+                      </span>
+                      <span className="legend-item">
+                        <span className="legend-swatch legend-completed" /> Completed
+                      </span>
                     </span>
-                    <span className="legend-item">
-                      <span className="legend-swatch legend-completed" /> Completed
-                    </span>
-                  </div>
-                </header>
+                  }
+                />
                 <div className="chart-grid" role="img" aria-label="Daily created and completed todos">
                   {dailyMetrics.map((point) => {
                     const createdHeight = `${Math.round((point.created / maxDailyMetric) * 100)}%`;
@@ -1253,74 +1283,75 @@ export function App() {
                     );
                   })}
                 </div>
-              </section>
+              </SubtlePanel>
 
-              <div className="breakdown-grid">
-                <section className="panel-subsection">
-                  <h2>By owner</h2>
-                  <ul className="breakdown-list breakdown-list-fixed">
+              <RowStack className="breakdown-grid">
+                <SubtlePanel>
+                  <Row className="section-head-row" style="title" as="h2" primary={<span className="title">By owner</span>} />
+                  <RowStack className="breakdown-list breakdown-list-fixed breakdown-row-stack">
                     {analyticsOwnerBreakdown.map((entry) => (
-                      <li key={entry.owner}>
-                        <span>{entry.owner}</span>
-                        <span>
-                          open {entry.openNow} | +{entry.createdInWindow} / -{entry.completedInWindow}
-                        </span>
-                      </li>
+                      <Row
+                        key={entry.owner}
+                        className="breakdown-row"
+                        primary={<span>{entry.owner}</span>}
+                        secondaryText={<span>open {entry.openNow} | +{entry.createdInWindow} / -{entry.completedInWindow}</span>}
+                      />
                     ))}
-                    {analyticsOwnerBreakdown.length === 0 ? <li>No owner data.</li> : null}
-                  </ul>
-                </section>
+                    {analyticsOwnerBreakdown.length === 0 ? <Row className="breakdown-row" primary={<span>No owner data.</span>} /> : null}
+                  </RowStack>
+                </SubtlePanel>
 
-                <section className="panel-subsection">
-                  <h2>By project</h2>
-                  <ul className="breakdown-list breakdown-list-fixed">
+                <SubtlePanel>
+                  <Row className="section-head-row" style="title" as="h2" primary={<span className="title">By project</span>} />
+                  <RowStack className="breakdown-list breakdown-list-fixed breakdown-row-stack">
                     {analyticsProjectBreakdown.map((entry) => (
-                      <li key={entry.projectTag}>
-                        <span>{entry.projectTag}</span>
-                        <span>
-                          open {entry.openNow} | +{entry.createdInWindow} / -{entry.completedInWindow}
-                        </span>
-                      </li>
+                      <Row
+                        key={entry.projectTag}
+                        className="breakdown-row"
+                        primary={<span>{entry.projectTag}</span>}
+                        secondaryText={<span>open {entry.openNow} | +{entry.createdInWindow} / -{entry.completedInWindow}</span>}
+                      />
                     ))}
-                    {analyticsProjectBreakdown.length === 0 ? <li>No project data.</li> : null}
-                  </ul>
-                </section>
-              </div>
-            </section>
+                    {analyticsProjectBreakdown.length === 0 ? <Row className="breakdown-row" primary={<span>No project data.</span>} /> : null}
+                  </RowStack>
+                </SubtlePanel>
+              </RowStack>
+            </Panel>
           ) : (
-            <section className="panel user-page">
-              <header className="section-head">
-                <h1 className="title">
-                  Settings
-                </h1>
-              </header>
-              <p className="task-meta panel-line">
-                Use this token with the `Authorization: Bearer ...` header for CLI and API calls.
-              </p>
-              <p className="task-meta panel-line">Keep it private. If leaked, rotate it from your environment configuration.</p>
-              <label className="token-label panel-line" htmlFor="token-field">
-                Bearer token
-              </label>
-              <input id="token-field" className="text-input panel-line" type="password" value={token ?? ""} readOnly />
-              <div className="token-actions">
-                <button className="btn" onClick={() => void copyToken()} disabled={!token}>
-                  {copiedToken ? "Copied" : "Copy token"}
-                </button>
-              </div>
-            </section>
+            <Panel className="user-page">
+              <Row className="section-head-row" style="title" as="h1" primary={<span className="title">Settings</span>} />
+              <Row className="section-head-row" style="title" as="h2" primary={<span className="title">API access</span>} />
+              <RowStack>
+                <Row className="settings-row" style="secondary" primary={<span>Use this token with the `Authorization: Bearer ...` header for CLI and API calls.</span>} />
+                <Row className="settings-row" style="contrast" primary={<span>Keep it private. If leaked, rotate it from your environment configuration.</span>} />
+                <Row
+                  className="settings-row"
+                  style="primary"
+                  primary={
+                    <>
+                      <label className="token-label" htmlFor="token-field">Bearer token</label>
+                      <input id="token-field" className="text-input" type="password" value={token ?? ""} readOnly />
+                    </>
+                  }
+                  actions={[{ icon: copiedToken ? "Copied" : "Copy token", callbackFunc: token ? () => void copyToken() : undefined, disabled: !token }]}
+                />
+              </RowStack>
+            </Panel>
           )}
-        </section>
-      </div>
+        </Container>
+      </Container>
 
-      <section className="dock" aria-label="Control dock">
-        <button className="dock-action" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}> 
-          {theme === "dark" ? "Light" : "Dark"}
-        </button>
-        <span className="dock-divider" aria-hidden="true" />
-        <button className="dock-action" onClick={() => void logout()}>
-          Exit
-        </button>
-      </section>
-    </main>
+      <Panel as="section" className="dock" aria-label="Control dock">
+        <Row
+          className="dock-row"
+          density="compact"
+          primary={<span className="task-meta">Session</span>}
+          actions={[
+            { icon: theme === "dark" ? "Light" : "Dark", callbackFunc: () => setTheme(theme === "dark" ? "light" : "dark") },
+            { icon: "Exit", callbackFunc: () => void logout() },
+          ]}
+        />
+      </Panel>
+    </Container>
   );
 }
